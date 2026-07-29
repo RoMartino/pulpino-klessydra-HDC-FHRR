@@ -1,0 +1,22 @@
+Klessydra-S1:
+  incdirs: [
+    .,
+  ]
+  files: [
+    klessydra-s1/PKG_RiscV_Klessydra_parameters.vhd,
+    klessydra-s1/PKG_RiscV_Klessydra.vhd,
+    klessydra-s1/RTL-IF_STAGE.vhd,
+    klessydra-s1/RTL-Load_Store_Unit.vhd,
+    klessydra-s1/RTL-Accumulator.vhd,
+    klessydra-s1/RTL-Processing_Pipeline.vhd,
+    klessydra-s1/RTL-CSR_Unit.vhd,
+    klessydra-s1/RTL-Program_Counter_unit.vhd,
+    klessydra-s1/RTL-Debug_Unit.vhd,
+    klessydra-s1/RTL-Registerfile.vhd,
+    klessydra-s1/RTL-DSP_Unit.vhd,
+    klessydra-s1/RTL-Scratchpad_Memory_Interface.vhd,
+    klessydra-s1/RTL-ID_STAGE.vhd,
+    klessydra-s1/RTL-Scratchpad_Memory.vhd,
+    klessydra-s1/RTL-IE_STAGE.vhd,
+    klessydra-s1/STR-Klessydra_top.vhd
+  ]

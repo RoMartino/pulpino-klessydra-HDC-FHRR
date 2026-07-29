@@ -1,0 +1,2 @@
+add_subdirectory(cfd_sth_no_accl)
+add_subdirectory(cfd_mth_no_accl)

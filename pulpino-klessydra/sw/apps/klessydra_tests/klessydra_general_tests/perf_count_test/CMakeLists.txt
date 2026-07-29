@@ -1,0 +1,1 @@
+add_application(perf_count perf_count.c)

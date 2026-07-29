@@ -1,0 +1,5 @@
+# Local backups and snapshots (do not publish)
+*.backup
+*.zip
+*.pre-uniformity-*
+klessydra-m-backup/

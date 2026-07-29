@@ -1,0 +1,30 @@
+# ---- Build directories (regenerated locally) ----
+pulpino-klessydra/sw/build*/
+**/build_fhrr*/
+
+# ---- Simulation work products ----
+**/work/
+pulpino-klessydra/vsim/work/
+pulpino-klessydra/vsim/vcompile/
+pulpino-klessydra/vsim/execution_trace.txt
+transcript
+*.wlf
+vsim.log
+
+# ---- CMake / CTest generated artifacts ----
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+
+# ---- Compiled objects / archives / editor files ----
+*.o
+*.d
+*.a
+*.swp
+*~
+
+# ---- Toolchain sources/builds pulled by toolchain-hdc/build-toolchain.sh ----
+# (these live outside the repo by default; ignored here as a safety net)
+riscv-gnu-toolchain-hdc-src/
+riscv-gnu-toolchain-hdc-build/

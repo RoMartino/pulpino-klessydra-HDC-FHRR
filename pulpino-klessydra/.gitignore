@@ -1,0 +1,34 @@
+# Editor / swap files
+*.swp
+*~
+
+# Local build directories (regenerated)
+sw/build*
+imperio
+
+# CMake / CTest generated artifacts
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+Makefile.cmake
+
+# Compiled objects / archives
+*.o
+*.d
+*.a
+
+# Simulation work products
+work/
+vsim/work/
+vsim/vcompile/
+vsim/execution_trace.txt
+transcript
+*.wlf
+
+# Synthesis netlists
+ips/klessydra_netlists/netlists
+
+# NOTE: the IP cores under ips/ (Morph, F03x, ...), KView, and the HDC
+# test/library sources are VENDORED in this repository and intentionally
+# tracked — they are NOT ignored here.

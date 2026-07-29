@@ -1,0 +1,17 @@
+KFPU:
+  incdirs: [
+    .,
+  ]
+  files: [
+    modules/config.sv,
+    modules/fpu_pkg.vhd,
+    modules/fp1_to_fp2.vhd,
+    modules/fp_add.vhd,
+    modules/fp_classify.vhd,
+    modules/fp_div.vhd,
+    modules/fp_mul.vhd,
+    modules/fp_norm.vhd,
+    modules/fp_round.vhd,
+    modules/fp_sqrt.vhd,
+    modules/fpu_top.vhd
+  ]

@@ -1,0 +1,1 @@
+add_application(KVCU_test KVCU_test.cpp LABELS "klessydra_tests")

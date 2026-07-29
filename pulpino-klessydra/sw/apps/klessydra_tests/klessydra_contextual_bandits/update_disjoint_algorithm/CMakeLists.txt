@@ -1,0 +1,1 @@
+add_application(update_disjoint_algorithm update_disjoint_algorithm.cpp LABELS "klessydra_tests")

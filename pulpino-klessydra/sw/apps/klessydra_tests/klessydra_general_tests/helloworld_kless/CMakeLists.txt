@@ -1,0 +1,1 @@
+add_application(helloworld_kless helloworld.c)
