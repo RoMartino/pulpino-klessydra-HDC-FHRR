@@ -98,7 +98,7 @@ then
 	KLESS_MHPMCOUNTER_EN=1          # Can be set to 1 or 0 only. Setting to zero will disable all performance counters except "MCYCLE/H" and "MINSTRET/H"
 	KLESS_count_all=0               # Perfomance counters count for all the harts instead of there own hart
 	KLESS_debug_en=0                # Generates the debug unit
-	KLESS_tracer_en=1               # Generate the instruction tracer used only for debugging purposes
+	KLESS_tracer_en="${KLESS_tracer_en:-1}"               # Generate the instruction tracer used only for debugging purposes
     #  -------------------------------------------------------------------------------------------------------------------------------------------------------
     #  --  ██████╗ ██╗███████╗ ██████╗██╗   ██╗     ██████╗ ██████╗ ██████╗ ███████╗███████╗    ██╗ ██████╗ ██████╗ ███╗   ██╗███████╗██╗ ██████╗ ███████╗  --
     #  --  ██╔══██╗██║██╔════╝██╔════╝╚██╗ ██╔╝    ██╔════╝██╔═══██╗██╔══██╗██╔════╝██╔════╝   ██╔╝██╔════╝██╔═══██╗████╗  ██║██╔════╝██║██╔════╝ ██╔════╝  --
@@ -343,6 +343,8 @@ CC="$COMPILER" cmake "$SOURCE_DIR" \
     -DFHRR_TEST_FIXED_SEED="${FHRR_TEST_FIXED_SEED:-}" \
     -DFHRR_TEST_DIRECT_MODE="${FHRR_TEST_DIRECT_MODE:-OFF}" \
     -DFHRR_TEST_ENCODE_ROWS="${FHRR_TEST_ENCODE_ROWS:-}" \
+    -DFHRR_TEST_PERMUTE_CASE_BEGIN="${FHRR_TEST_PERMUTE_CASE_BEGIN:-}" \
+    -DFHRR_TEST_PERMUTE_CASE_END="${FHRR_TEST_PERMUTE_CASE_END:-}" \
     -DGCC_MARCH="$GCC_MARCH" \
     -DARDUINO_LIB="$ARDUINO_LIB" \
     -DPL_NETLIST="$PL_NETLIST" \

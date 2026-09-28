@@ -68,6 +68,22 @@ constexpr std::int32_t kShiftCases[] = {
 };
 constexpr std::size_t kNumShiftCases = sizeof(kShiftCases) / sizeof(kShiftCases[0]);
 
+// Optional sub-range of the shift cases [BEGIN, END), to split very long
+// simulations (large D) into several shorter runs. Default: all cases.
+#ifndef FHRR_TEST_PERMUTE_CASE_BEGIN
+#define FHRR_TEST_PERMUTE_CASE_BEGIN 0
+#endif
+#ifndef FHRR_TEST_PERMUTE_CASE_END
+#define FHRR_TEST_PERMUTE_CASE_END kNumShiftCases
+#endif
+constexpr std::size_t kCaseEnd = static_cast<std::size_t>(FHRR_TEST_PERMUTE_CASE_END) < kNumShiftCases
+                                     ? static_cast<std::size_t>(FHRR_TEST_PERMUTE_CASE_END)
+                                     : kNumShiftCases;
+constexpr std::size_t kCaseBegin = static_cast<std::size_t>(FHRR_TEST_PERMUTE_CASE_BEGIN) < kCaseEnd
+                                       ? static_cast<std::size_t>(FHRR_TEST_PERMUTE_CASE_BEGIN)
+                                       : kCaseEnd;
+constexpr std::size_t kNumRunCases = kCaseEnd - kCaseBegin;
+
 int run_one_shift(std::int32_t shift, const std::uint32_t* input) {
     using namespace klessydra::hdc;
 
@@ -160,17 +176,17 @@ int run_case() {
     tests::fill_low_byte_words_for_mode(input_words, kPermuteElements, seed, 0);
 
     int fails = 0;
-    for (std::size_t i = 0; i < kNumShiftCases; ++i) {
+    for (std::size_t i = kCaseBegin; i < kCaseEnd; ++i) {
         if (run_one_shift(kShiftCases[i], input_words) != 0) {
             ++fails;
         }
     }
 
     if (fails == 0) {
-        std::printf("[fhrr_permute] all %u shift cases PASS\n", static_cast<unsigned>(kNumShiftCases));
+        std::printf("[fhrr_permute] all %u shift cases PASS\n", static_cast<unsigned>(kNumRunCases));
     } else {
         std::printf("[fhrr_permute] %d / %u shift cases FAILED\n",
-                    fails, static_cast<unsigned>(kNumShiftCases));
+                    fails, static_cast<unsigned>(kNumRunCases));
     }
     return fails == 0 ? 0 : 1;
 }
@@ -185,7 +201,7 @@ int main() {
     if (Klessydra_get_coreID() == 0) {
         std::printf("\n[fhrr_permute_test] start (elements=%u, shift_cases=%u)\n",
                     static_cast<unsigned>(kPermuteElements),
-                    static_cast<unsigned>(kNumShiftCases));
+                    static_cast<unsigned>(kNumRunCases));
         g_test_status = run_case();
         if (g_test_status == 0) {
             std::printf("[fhrr_permute_test] PASS\n");

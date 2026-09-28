@@ -87,14 +87,15 @@ Status measure_status(Operation operation, std::uint32_t& cycles) {
     return status;
 }
 
+// hw_accel_cycles: the per-FU counter of the accelerator is cleared when an
+// instruction is dispatched and counts the cycles in which that functional
+// unit is active, so the value read after the call is the execution time of
+// the (single) FHRR instruction issued by the library.
 template <typename Operation>
 Status measure_hw_status(Operation operation, PerfCounterReader perf_counter, OperationTiming& timing) {
-    const std::uint32_t perf_before =
-        perf_counter == nullptr ? 0u : static_cast<std::uint32_t>(perf_counter());
     const Status status = measure_status(operation, timing.hw_cycles);
-    const std::uint32_t perf_after =
+    timing.hw_accel_cycles =
         perf_counter == nullptr ? 0u : static_cast<std::uint32_t>(perf_counter());
-    timing.hw_accel_cycles = perf_counter == nullptr ? 0u : elapsed_cycles(perf_before, perf_after);
     return status;
 }
 
@@ -123,6 +124,8 @@ inline void print_result_line(const char* op,
                 static_cast<unsigned>(timing.hw_cycles),
                 static_cast<unsigned>(timing.hw_accel_cycles));
     print_speedup(timing.sw_cycles, timing.hw_cycles);
+    std::printf(" fu_speedup=");
+    print_speedup(timing.sw_cycles, timing.hw_accel_cycles);
     std::printf("\n");
 }
 

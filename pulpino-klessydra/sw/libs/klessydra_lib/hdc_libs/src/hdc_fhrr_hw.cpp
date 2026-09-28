@@ -47,41 +47,28 @@ inline void* spm_b() { return reinterpret_cast<void*>(spmaddrB); }
 inline void* spm_c() { return reinterpret_cast<void*>(spmaddrC); }
 inline void* spm_d() { return reinterpret_cast<void*>(spmaddrD); }
 
-template <std::size_t N>
-void zero_words(std::array<std::uint32_t, N>& words) {
-    for (std::size_t index = 0; index < N; ++index) {
-        words[index] = 0;
-    }
+// All FHRR hardware back-ends issue ONE custom instruction over the whole
+// hypervector (CSR_MVSIZE = D * 4 bytes): the operands are placed in the
+// scratchpads, the functional unit streams the D elements P lanes per step,
+// and the result is read back. The hypervector size must be a multiple of
+// the SIMD lanes P.
+inline bool whole_hv_supported(std::size_t elements) {
+    return elements != 0 && (elements % kSimdLanes) == 0;
 }
 
-void copy_phase_chunk(std::array<std::uint32_t, kSimdLanes>& dst,
-                      FhrrPhaseVectorConstView src,
-                      std::size_t offset) {
-    zero_words(dst);
-    for (std::size_t lane = 0; lane < kSimdLanes && offset + lane < src.elements; ++lane) {
-        dst[lane] = src.words[offset + lane];
-    }
+// kmemld/kmemstr run in the load/store unit in the background. A scalar load
+// waits until the LSU is free, i.e. until the previous scratchpad transfers
+// have completed. Issuing the FHRR instruction only after this barrier means
+// that the functional unit starts with idle scratchpads (as in a deployed
+// system, where the model is already resident in the SPMs) and its cycle
+// counter measures only the operation itself.
+volatile std::uint32_t g_lsu_sync_word = 0;
+inline void wait_spm_transfers() {
+    (void)g_lsu_sync_word;
 }
 
-void copy_phase_chunk_back(FhrrPhaseVectorView dst,
-                           std::size_t offset,
-                           const std::array<std::uint32_t, kSimdLanes>& src) {
-    for (std::size_t lane = 0; lane < kSimdLanes && offset + lane < dst.elements; ++lane) {
-        dst.words[offset + lane] = src[lane];
-    }
-}
-
-template <typename AccViewT>
-void copy_acc_chunk(std::array<std::uint32_t, kSimdLanes>& imag_chunk,
-                    std::array<std::uint32_t, kSimdLanes>& real_chunk,
-                    AccViewT src,
-                    std::size_t offset) {
-    zero_words(imag_chunk);
-    zero_words(real_chunk);
-    for (std::size_t lane = 0; lane < kSimdLanes && offset + lane < src.elements; ++lane) {
-        imag_chunk[lane] = src.imag_words[offset + lane];
-        real_chunk[lane] = src.real_words[offset + lane];
-    }
+inline std::uint8_t* spm_offset(void* spm, std::size_t bytes) {
+    return reinterpret_cast<std::uint8_t*>(spm) + bytes;
 }
 
 }  // namespace
@@ -96,28 +83,25 @@ Status bind_hw(FhrrPhaseVectorView dst, FhrrPhaseVectorConstView a, FhrrPhaseVec
     if (dst.elements != a.elements || dst.elements != b.elements) {
         return Status::SizeMismatch;
     }
-
-    std::array<std::uint32_t, kSimdLanes> lhs {};
-    std::array<std::uint32_t, kSimdLanes> rhs {};
-    std::array<std::uint32_t, kSimdLanes> out {};
-
-    for (std::size_t offset = 0; offset < dst.elements; offset += kSimdLanes) {
-        copy_phase_chunk(lhs, a, offset);
-        copy_phase_chunk(rhs, b, offset);
-        zero_words(out);
-
-        CSR_MVSIZE(static_cast<int>(kSimdLanes * kFhrrLaneBytes));
-        kmemld(spm_a(), lhs.data(), static_cast<int>(kSimdLanes * kFhrrLaneBytes));
-        kmemld(spm_b(), rhs.data(), static_cast<int>(kSimdLanes * kFhrrLaneBytes));
-        hvbind(spm_c(), spm_a(), spm_b());
-        kmemstr(out.data(), spm_c(), static_cast<int>(kSimdLanes * kFhrrLaneBytes));
-
-        copy_phase_chunk_back(dst, offset, out);
+    if (!whole_hv_supported(dst.elements)) {
+        return Status::UnsupportedOperation;
     }
+
+    const int bytes = static_cast<int>(dst.elements * kFhrrLaneBytes);
+    CSR_MVSIZE(bytes);
+    kmemld(spm_a(), const_cast<std::uint32_t*>(a.words), bytes);
+    kmemld(spm_b(), const_cast<std::uint32_t*>(b.words), bytes);
+    wait_spm_transfers();
+    hvbind(spm_c(), spm_a(), spm_b());
+    kmemstr(dst.words, spm_c(), bytes);
 
     return Status::Ok;
 }
 
+// Bundling: the functional unit reads the accumulator interleaved per SIMD
+// chunk ([imag chunk k | real chunk k], 2*P words per chunk) from spm_a and the
+// phase hypervector from spm_b, and writes the updated accumulator back to
+// spm_c with the same interleaved layout.
 Status bundle_hw(FhrrBundleAccumulatorView acc, FhrrPhaseVectorConstView hv) {
     if (!is_hw_fhrr_selected()) {
         return Status::HardwareUnavailable;
@@ -128,37 +112,23 @@ Status bundle_hw(FhrrBundleAccumulatorView acc, FhrrPhaseVectorConstView hv) {
     if (acc.elements != hv.elements) {
         return Status::SizeMismatch;
     }
+    if (!whole_hv_supported(acc.elements)) {
+        return Status::UnsupportedOperation;
+    }
 
-    std::array<std::uint32_t, kSimdLanes> imag_chunk {};
-    std::array<std::uint32_t, kSimdLanes> real_chunk {};
-    std::array<std::uint32_t, kSimdLanes> phase_chunk {};
-    std::array<std::uint32_t, 2 * kSimdLanes> phase_cycle_aligned {};
-    std::array<std::uint32_t, 2 * kSimdLanes> interleaved_in {};
-    std::array<std::uint32_t, 2 * kSimdLanes> interleaved_out {};
-
-    for (std::size_t offset = 0; offset < acc.elements; offset += kSimdLanes) {
-        copy_acc_chunk(imag_chunk, real_chunk, acc, offset);
-        copy_phase_chunk(phase_chunk, hv, offset);
-
-        for (std::size_t lane = 0; lane < kSimdLanes; ++lane) {
-            interleaved_in[lane] = imag_chunk[lane];
-            interleaved_in[kSimdLanes + lane] = real_chunk[lane];
-        }
-        for (std::size_t word = 0; word < interleaved_out.size(); ++word) {
-            interleaved_out[word] = 0;
-            phase_cycle_aligned[word] = phase_chunk[word % kSimdLanes];
-        }
-
-        CSR_MVSIZE(static_cast<int>(kSimdLanes * kFhrrLaneBytes));
-        kmemld(spm_a(), interleaved_in.data(), static_cast<int>(sizeof(interleaved_in)));
-        kmemld(spm_b(), phase_cycle_aligned.data(), static_cast<int>(sizeof(phase_cycle_aligned)));
-        hvbundle(spm_c(), spm_a(), spm_b());
-        kmemstr(interleaved_out.data(), spm_c(), static_cast<int>(sizeof(interleaved_out)));
-
-        for (std::size_t lane = 0; lane < kSimdLanes && offset + lane < acc.elements; ++lane) {
-            acc.imag_words[offset + lane] = interleaved_out[lane];
-            acc.real_words[offset + lane] = interleaved_out[kSimdLanes + lane];
-        }
+    const std::size_t chunk_bytes = kSimdLanes * kFhrrLaneBytes;
+    const int bytes = static_cast<int>(acc.elements * kFhrrLaneBytes);
+    for (std::size_t offset = 0, k = 0; offset < acc.elements; offset += kSimdLanes, ++k) {
+        kmemld(spm_offset(spm_a(), 2 * k * chunk_bytes), acc.imag_words + offset, static_cast<int>(chunk_bytes));
+        kmemld(spm_offset(spm_a(), (2 * k + 1) * chunk_bytes), acc.real_words + offset, static_cast<int>(chunk_bytes));
+    }
+    CSR_MVSIZE(bytes);
+    kmemld(spm_b(), const_cast<std::uint32_t*>(hv.words), bytes);
+    wait_spm_transfers();
+    hvbundle(spm_c(), spm_a(), spm_b());
+    for (std::size_t offset = 0, k = 0; offset < acc.elements; offset += kSimdLanes, ++k) {
+        kmemstr(acc.imag_words + offset, spm_offset(spm_c(), 2 * k * chunk_bytes), static_cast<int>(chunk_bytes));
+        kmemstr(acc.real_words + offset, spm_offset(spm_c(), (2 * k + 1) * chunk_bytes), static_cast<int>(chunk_bytes));
     }
 
     return Status::Ok;
@@ -182,6 +152,7 @@ Status similarity_hw(std::int32_t& out, FhrrPhaseVectorConstView a, FhrrPhaseVec
     CSR_MVSIZE(static_cast<int>(a.elements * kFhrrLaneBytes));
     kmemld(spm_a(), const_cast<std::uint32_t*>(a.words), static_cast<int>(a.elements * kFhrrLaneBytes));
     kmemld(spm_b(), const_cast<std::uint32_t*>(b.words), static_cast<int>(b.elements * kFhrrLaneBytes));
+    wait_spm_transfers();
     hvsim(spm_c(), spm_a(), spm_b());
     kmemstr(&hw_result, spm_c(), static_cast<int>(sizeof(hw_result)));
     out = hw_result;
@@ -199,33 +170,28 @@ Status clip_hw(FhrrPhaseVectorView dst, FhrrBundleAccumulatorConstView acc) {
     if (dst.elements != acc.elements) {
         return Status::SizeMismatch;
     }
-
+    if (!whole_hv_supported(dst.elements)) {
+        return Status::UnsupportedOperation;
+    }
     for (std::size_t index = 0; index < acc.elements; ++index) {
         if (static_cast<std::int32_t>(acc.real_words[index]) == 0) {
             return Status::UnsupportedOperation;
         }
     }
 
-    std::array<std::uint32_t, kSimdLanes> imag_chunk {};
-    std::array<std::uint32_t, kSimdLanes> real_chunk {};
-    std::array<std::uint32_t, kSimdLanes> out_chunk {};
-
-    for (std::size_t offset = 0; offset < dst.elements; offset += kSimdLanes) {
-        copy_acc_chunk(imag_chunk, real_chunk, acc, offset);
-        zero_words(out_chunk);
-
-        CSR_MVSIZE(static_cast<int>(kSimdLanes * kFhrrLaneBytes));
-        kmemld(spm_a(), imag_chunk.data(), static_cast<int>(kSimdLanes * kFhrrLaneBytes));
-        kmemld(spm_b(), real_chunk.data(), static_cast<int>(kSimdLanes * kFhrrLaneBytes));
-        hvclip(spm_c(), spm_a(), spm_b());
-        kmemstr(out_chunk.data(), spm_c(), static_cast<int>(kSimdLanes * kFhrrLaneBytes));
-
-        copy_phase_chunk_back(dst, offset, out_chunk);
-    }
+    const int bytes = static_cast<int>(dst.elements * kFhrrLaneBytes);
+    CSR_MVSIZE(bytes);
+    kmemld(spm_a(), const_cast<std::uint32_t*>(acc.imag_words), bytes);
+    kmemld(spm_b(), const_cast<std::uint32_t*>(acc.real_words), bytes);
+    wait_spm_transfers();
+    hvclip(spm_c(), spm_a(), spm_b());
+    kmemstr(dst.words, spm_c(), bytes);
 
     return Status::Ok;
 }
 
+// Encoding (FPE): spm_a holds the F scalar features, spm_b the F item
+// hypervectors stored row after row (row r at offset r * D * 4 bytes).
 Status encode_hw(FhrrEncodeAccumulatorView acc,
                  FhrrScalarVectorConstView scalars,
                  FhrrPhaseMatrixConstView hvs) {
@@ -235,44 +201,22 @@ Status encode_hw(FhrrEncodeAccumulatorView acc,
     if (!valid_encode_args(acc, scalars, hvs)) {
         return Status::InvalidArgument;
     }
-    std::array<std::uint32_t, kSimdLanes> out_chunk {};
-    std::array<std::uint32_t, kSimdLanes> row_buffer {};
-    std::array<std::uint32_t, kMaxEncodeRows * kSimdLanes> hv_matrix_buffer {};
-
-    if (scalars.count > kMaxEncodeRows) {
+    if (scalars.count > kMaxEncodeRows || !whole_hv_supported(acc.elements)) {
         return Status::UnsupportedOperation;
     }
 
+    const std::size_t row_bytes = acc.elements * kFhrrLaneBytes;
     CSR_MPSCLFAC(static_cast<int>(scalars.count));
-
-    for (std::size_t offset = 0; offset < acc.elements; offset += kSimdLanes) {
-        zero_words(out_chunk);
-        for (std::size_t word = 0; word < hv_matrix_buffer.size(); ++word) {
-            hv_matrix_buffer[word] = 0;
-        }
-
-        for (std::size_t row = 0; row < scalars.count; ++row) {
-            for (std::size_t lane = 0; lane < kSimdLanes; ++lane) {
-                row_buffer[lane] = 0;
-                if (offset + lane < acc.elements) {
-                    row_buffer[lane] = hvs.words[row * hvs.row_stride + offset + lane];
-                }
-            }
-            for (std::size_t lane = 0; lane < kSimdLanes; ++lane) {
-                hv_matrix_buffer[row * kSimdLanes + lane] = row_buffer[lane];
-            }
-        }
-
-        CSR_MVSIZE(static_cast<int>(kSimdLanes * kFhrrLaneBytes));
-        kmemld(spm_a(), const_cast<std::uint32_t*>(scalars.words), static_cast<int>(scalars.count * kFhrrLaneBytes));
-        kmemld(spm_b(), hv_matrix_buffer.data(), static_cast<int>(scalars.count * kSimdLanes * kFhrrLaneBytes));
-        hvenc(spm_c(), spm_a(), spm_b());
-        kmemstr(out_chunk.data(), spm_c(), static_cast<int>(kSimdLanes * kFhrrLaneBytes));
-
-        for (std::size_t lane = 0; lane < kSimdLanes && offset + lane < acc.elements; ++lane) {
-            acc.words[offset + lane] = out_chunk[lane];
-        }
+    CSR_MVSIZE(static_cast<int>(row_bytes));
+    kmemld(spm_a(), const_cast<std::uint32_t*>(scalars.words), static_cast<int>(scalars.count * kFhrrLaneBytes));
+    for (std::size_t row = 0; row < scalars.count; ++row) {
+        kmemld(spm_offset(spm_b(), row * row_bytes),
+               const_cast<std::uint32_t*>(hvs.words + row * hvs.row_stride),
+               static_cast<int>(row_bytes));
     }
+    wait_spm_transfers();
+    hvenc(spm_c(), spm_a(), spm_b());
+    kmemstr(acc.words, spm_c(), static_cast<int>(row_bytes));
 
     return Status::Ok;
 }
@@ -289,9 +233,8 @@ Status encode_hw(FhrrEncodeAccumulatorView acc,
 // size that is a multiple of SIMD lanes (the canonical FHRR layout);
 // non-multiple sizes fall back to the SW reference automatically via
 // dispatch_permute()'s Auto/Software branch.
-// rs1 is taken mod D in this glue so the FU only sees a value in [0, D),
-// keeping the FU's chunk_count/chunk_shift arithmetic compact (D <= 256
-// covers every HDC dimension we use; for D > 256 the SW path takes over).
+// rs1 is taken mod D in this glue so the FU only sees a value in [0, D)
+// (the FU reads the shift from rs1[15:0], so any D < 65536 is supported).
 Status permute_hw(FhrrPhaseVectorView dst, FhrrPhaseVectorConstView src, std::int32_t shift) {
     if (!is_hw_fhrr_selected()) {
         return Status::HardwareUnavailable;
@@ -341,6 +284,7 @@ Status permute_hw(FhrrPhaseVectorView dst, FhrrPhaseVectorConstView src, std::in
            static_cast<int>(bytes));
 
     void* shift_arg = reinterpret_cast<void*>(static_cast<std::intptr_t>(shift_arg_int));
+    wait_spm_transfers();
     hvperm(spm_c(), shift_arg, spm_a());
 
     kmemstr(dst.words, spm_c(), static_cast<int>(bytes));

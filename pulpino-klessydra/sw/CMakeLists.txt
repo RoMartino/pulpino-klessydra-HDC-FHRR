@@ -28,6 +28,8 @@ option(FHRR_TEST_DEBUG_MODE "Enable deterministic small-size defaults for FHRR H
 option(FHRR_TEST_DIRECT_MODE "Use direct lane patterns instead of pseudo-random inputs in FHRR HDC tests" OFF)
 set(FHRR_TEST_VECTOR_ELEMENTS "" CACHE STRING "Override the number of FHRR test elements for all FHRR test apps")
 set(FHRR_TEST_ENCODE_ROWS "" CACHE STRING "Override the number of rows for the FHRR encode test")
+set(FHRR_TEST_PERMUTE_CASE_BEGIN "" CACHE STRING "First shift case run by fhrr_permute_test (default 0)")
+set(FHRR_TEST_PERMUTE_CASE_END "" CACHE STRING "One past the last shift case run by fhrr_permute_test (default: all)")
 set(FHRR_TEST_FIXED_SEED "" CACHE STRING "Override the FHRR test seed for deterministic reruns")
 
 if(${RISCY_RV32F} AND (${USE_ZERO_RISCY} OR ${USE_KLESSYDRA}))
@@ -158,6 +160,12 @@ endif()
 
 if(NOT "${FHRR_TEST_ENCODE_ROWS}" STREQUAL "")
   add_definitions(-DFHRR_TEST_ENCODE_ROWS=${FHRR_TEST_ENCODE_ROWS})
+endif()
+if(NOT "${FHRR_TEST_PERMUTE_CASE_BEGIN}" STREQUAL "")
+  add_definitions(-DFHRR_TEST_PERMUTE_CASE_BEGIN=${FHRR_TEST_PERMUTE_CASE_BEGIN})
+endif()
+if(NOT "${FHRR_TEST_PERMUTE_CASE_END}" STREQUAL "")
+  add_definitions(-DFHRR_TEST_PERMUTE_CASE_END=${FHRR_TEST_PERMUTE_CASE_END})
 endif()
 
 if(NOT "${FHRR_TEST_FIXED_SEED}" STREQUAL "")

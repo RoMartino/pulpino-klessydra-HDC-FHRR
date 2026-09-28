@@ -124,17 +124,33 @@ Each test runs the operation with the software back-end and with the
 hardware accelerator, compares the two results bit by bit and prints, e.g.:
 
 ```
-[fhrr_permute] shift=   0 PASS  (sw_cy=4681 hw_cy=926)
-FHRR_RESULT op=permute simd=8 hv_elements=256 status=PASS sw_cycles=4681 hw_cycles=926 hw_accel_cycles=281 speedup=5.055
+[fhrr_permute] shift=   0 PASS  (sw_cy=4681 hw_cy=938)
+FHRR_RESULT op=permute simd=8 hv_elements=256 status=PASS sw_cycles=4681 hw_cycles=938 hw_accel_cycles=34 speedup=4.990 fu_speedup=137.676
 ...
 [fhrr_permute_test] PASS
 ```
 
 * `sw_cycles` / `hw_cycles`: cycles of the whole software / hardware library
   call (the hardware call includes moving the vectors to and from the
-  accelerator scratchpads);
-* `hw_accel_cycles`: cycles counted inside the accelerator;
-* `speedup` = `sw_cycles / hw_cycles`.
+  accelerator scratchpads with `kmemld`/`kmemstr`);
+* `hw_accel_cycles`: cycles of the FHRR instruction, from the accelerator's
+  per-FU counter. The hardware library issues **one instruction over the whole
+  hypervector** and dispatches it only after the scratchpad transfers have
+  completed, so this is the execution time of the operation on operands already
+  resident in the scratchpads;
+* `speedup` = `sw_cycles / hw_cycles` (end-to-end library call);
+* `fu_speedup` = `sw_cycles / hw_accel_cycles` (functional unit only).
+
+Measured FU latency (cycles, *D* elements, *P* lanes, *F* encoded features):
+
+| Operation   | Cycles                                   |
+|-------------|------------------------------------------|
+| Encoding    | F·D/P + 4                                |
+| Binding     | D/P + 2                                  |
+| Bundling    | 2·D/P + 3                                |
+| Similarity  | D/P + log2(P) + 4 (+1 for P ≥ 4)         |
+| Clipping    | 52·D/P + 6 (radix-2 divider)             |
+| Permutation | D/P + 2 (any shift)                      |
 
 ### Configuration
 
@@ -150,6 +166,8 @@ build directory (use one build directory per configuration).
 | `FHRR_TEST_VECTOR_ELEMENTS` | Hypervector size *D* used by the tests                   | `16`    |
 | `FHRR_TEST_ENCODE_ROWS`     | Number of features encoded by `fhrr_encode_test` (≤ 31)  | `2`     |
 | `FHRR_TEST_FIXED_SEED`      | Fixed seed for the pseudo-random test vectors            | from cycle counter |
+| `FHRR_TEST_PERMUTE_CASE_BEGIN` / `_END` | Run only shift cases [BEGIN, END) of the 12 in `fhrr_permute_test` (split very long runs) | all |
+| `KLESS_tracer_en`           | Instruction trace files (`execution_*.txt`); set `0` for long runs (*D* ≥ 4096), it does not change the cycle counts | `1` |
 
 Example: *P* = 32, *D* = 1024:
 
@@ -162,9 +180,12 @@ make vcompile
 make fhrr_permute_test.vsimc
 ```
 
-Constraints: *D* must be a multiple of *P* (and *D* ≥ *P*), and one hypervector
-(`4·D` bytes) must fit in a scratchpad (`KLESS_Addr_Width=16` covers
-*D* ≤ 2048 with margin).
+Constraints: *D* must be a multiple of *P* (and *D* ≥ *P*; Similarity also
+needs *D* to be a power of two). Each scratchpad must hold the largest operand:
+one hypervector is `4·D` bytes, the bundling accumulator `8·D` bytes and the
+encoding item matrix `4·F·D` bytes. `KLESS_Addr_Width=16` covers *D* ≤ 4096
+with *F* = 2; use `KLESS_Addr_Width=17` for *D* = 8192 (all six tests were
+validated bit-exact for *P* = 1…32 and *D* = 64…8192 with `Addr_Width=17`).
 
 ### Regression and sweeps
 

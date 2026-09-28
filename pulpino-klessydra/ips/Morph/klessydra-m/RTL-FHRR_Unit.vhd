@@ -447,11 +447,20 @@ architecture HDC of HDC_Unit is
 
   signal RD_Data_IE_lat                  : array_2d(accl_range)(Addr_Width -1 downto 0);
   signal BV_ptr                          : array_2d(THREAD_POOL_SIZE-1 downto 0)(Addr_Width downto 0);
-  signal HVSIZE_READ                     : array_2d(accl_range)(Addr_Width downto 0);  -- Bytes remaining to read
-  signal HVSIZE_READ_lat                 : array_2d(accl_range)(Addr_Width downto 0);  -- Bytes remaining to read
+  -- [20260928 clipwidth] HVSIZE_READ* count read bytes, but CLIP loads a cycle budget of
+  -- HVSIZE*(32+2+PRECISION_BIT_WIDTH) = 50*HVSIZE: with Addr_Width+1 bits it overflowed for
+  -- whole-HV CLIP at D >= 2048 (Addr_Width=17) / D >= 1024 (Addr_Width=16). 6 extra bits cover x64.
+  constant HVR_MSB                     : natural := Addr_Width + 6;
+  -- [20260928 clipsync] CLIP read budget per chunk (cycles). The radix-2 divider takes ~52
+  -- cycles per chunk, more than the former 32+2+PRECISION_BIT_WIDTH = 50: on long HVs the
+  -- budget ran out before the last division. The SPM addresses now advance on the divider
+  -- start (handshake), so the budget only has to be an upper bound.
+  constant CLIP_RD_BUDGET              : natural := 64;
+  signal HVSIZE_READ                     : array_2d(accl_range)(HVR_MSB downto 0);  -- Bytes remaining to read
+  signal HVSIZE_READ_lat                 : array_2d(accl_range)(HVR_MSB downto 0);  -- Bytes remaining to read
   signal HVSIZE_READ_MASK                : array_2d(accl_range)(Addr_Width downto 0);  -- Bytes remaining to read
-  signal HVSIZE_READ_init                : array_2d(accl_range)(Addr_Width downto 0); -- condition
-  signal HVSIZE_READ_init_clip                : array_2d(accl_range)(Addr_Width downto 0); -- condition
+  signal HVSIZE_READ_init                : array_2d(accl_range)(HVR_MSB downto 0); -- condition
+  signal HVSIZE_READ_init_clip                : array_2d(accl_range)(HVR_MSB downto 0); -- condition
   signal HVSIZE_WRITE                    : array_2d(accl_range)(Addr_Width downto 0);  -- Bytes remaining to write
   signal MPSCLFAC_HDC                    : array_2d(accl_range)(4 downto 0);
   signal busy_hdc_internal               : std_logic_vector(accl_range);
@@ -1089,6 +1098,13 @@ signal hdcu_clip_perf_counter_int    : array_2d(accl_range)(31 downto 0); -- Per
   -- main FSM does not write integer types.
   signal perm_chunk_count_int        : array_2d_int(accl_range) := (others => 0);
   signal perm_chunk_shift_int        : array_2d_int(accl_range) := (others => 0);
+  -- [20260928 encfix] ENCODE whole-HV read cursor. The FU streams the F item rows
+  -- chunk-major: for every SIMD chunk c it reads rows r = 0..F-1 (scalar at
+  -- RS1 + 4r, HV word at RS2 + r*HVSIZE + c*SIMD_RD_BYTES). The cursor holds the
+  -- (row, row byte offset, chunk byte offset) of the read currently on the bus.
+  signal enc_rd_row                  : array_2d_int(accl_range) := (others => 0);
+  signal enc_rd_rowoff               : array_2d_int(accl_range) := (others => 0);
+  signal enc_rd_coff                 : array_2d_int(accl_range) := (others => 0);
   signal perm_intra_shift_int        : array_2d_int(accl_range) := (others => 0);
   -- [Op-N2 Phase B timing fix 20260507] Registered chunk-index counter to
   -- replace the combinational div+mod+mul chain on the SPM read-address
@@ -1140,6 +1156,7 @@ begin
 
   dsp_exec_Unit : process(clk_i, rst_ni)  -- single cycle unit, fully synchronous 
     variable enc_next_row : integer;
+    variable enc_nrow, enc_nrowoff, enc_ncoff : integer;  -- [20260928 encfix] next ENCODE read
   begin
     if rst_ni = '0' then
       rf_rs2(h)     <= '0';
@@ -1243,12 +1260,29 @@ begin
 
             -- Increment the read addresses if there is a data grant
             if hdc_data_gnt_i(h) = '1' then
+
+              -- [20260928 encfix] ENCODE: the dsp_init read (chunk 0, row 0) was granted,
+              -- so the cursor moves to the next read (row 1, or chunk 1 when F = 1).
+              if decoded_instruction_DSP(HVENC_bit_position) = '1' then
+                if to_integer(unsigned(MPSCLFAC(harc_EXEC))) > 1 then
+                  enc_nrow    := 1;
+                  enc_nrowoff := to_integer(unsigned(HVSIZE(harc_EXEC)));
+                  enc_ncoff   := 0;
+                else
+                  enc_nrow    := 0;
+                  enc_nrowoff := 0;
+                  enc_ncoff   := SIMD_RD_BYTES_wire(h);
+                end if;
+                enc_rd_row(h)    <= enc_nrow;
+                enc_rd_rowoff(h) <= enc_nrowoff;
+                enc_rd_coff(h)   <= enc_ncoff;
+              end if;
               
               ------------------ Source Register 1 ------------------
               if vec_read_rs1_ID = '1'  then
                 --FHRR ENCODING
                 if decoded_instruction_DSP(HVENC_bit_position ) = '1'then 
-                  RS1_Data_IE_lat(h) <= RS1_Data_IE;
+                  RS1_Data_IE_lat(h) <= std_logic_vector(unsigned(RS1_Data_IE) + to_unsigned(enc_nrow * 4, RS1_Data_IE'length));
                   RS1_Data_ptr(h) <= RS1_Data_IE;
                 
                  --FHRR BUNDLING
@@ -1274,7 +1308,7 @@ begin
 
                 -- FHRR ENCODING
                 if decoded_instruction_DSP(HVENC_bit_position) = '1'then
-                  RS2_Data_IE_lat(h) <= RS2_Data_IE;
+                  RS2_Data_IE_lat(h) <= std_logic_vector(unsigned(RS2_Data_IE) + to_unsigned(enc_nrowoff + enc_ncoff, RS2_Data_IE'length));
                   RS2_Data_ptr(h) <= RS2_Data_IE;
 
                 -- FHRR BUNDLING
@@ -1300,14 +1334,14 @@ begin
 
               -- Decrement the vector elements that have already been operated on   
               if  (decoded_instruction_DSP(HVCLIP_bit_position)    = '1') then
-                    HVSIZE_READ(h) <= std_logic_vector(resize(unsigned(HVSIZE(harc_EXEC) )*(32+2+PRECISION_BIT_WIDTH)  + 8*SIMD_RD_BYTES_wire(h) , HVSIZE_READ(h)'length));
-                    HVSIZE_READ_init(h) <= std_logic_vector(resize(unsigned(HVSIZE(harc_EXEC) )*(32+2+PRECISION_BIT_WIDTH)  + 8*SIMD_RD_BYTES_wire(h) , HVSIZE_READ(h)'length));
-                    HVSIZE_READ_init_clip(h) <= std_logic_vector(resize(unsigned(HVSIZE(harc_EXEC) )*(32+2+PRECISION_BIT_WIDTH)  + 8*SIMD_RD_BYTES_wire(h) , HVSIZE_READ(h)'length));
+                    HVSIZE_READ(h) <= std_logic_vector(resize(unsigned(HVSIZE(harc_EXEC) )*CLIP_RD_BUDGET  + 8*SIMD_RD_BYTES_wire(h) , HVSIZE_READ(h)'length));
+                    HVSIZE_READ_init(h) <= std_logic_vector(resize(unsigned(HVSIZE(harc_EXEC) )*CLIP_RD_BUDGET  + 8*SIMD_RD_BYTES_wire(h) , HVSIZE_READ(h)'length));
+                    HVSIZE_READ_init_clip(h) <= std_logic_vector(resize(unsigned(HVSIZE(harc_EXEC) )*CLIP_RD_BUDGET  + 8*SIMD_RD_BYTES_wire(h) , HVSIZE_READ(h)'length));
               --FHRR ENCODING
               elsif decoded_instruction_DSP(HVENC_bit_position )  = '1' then
-                
-                HVSIZE_READ(h) <= std_logic_vector(resize(unsigned(HVSIZE(harc_EXEC)) * unsigned(MPSCLFAC(h)), HVSIZE_READ(h)'length)); 
-                HVSIZE_READ_init(h) <= std_logic_vector(resize(unsigned(HVSIZE(harc_EXEC)) * unsigned(MPSCLFAC(h)), HVSIZE_READ(h)'length)); 
+                -- [20260928 encfix] F*D/P reads in total, one already granted in dsp_init.
+                HVSIZE_READ(h) <= std_logic_vector(resize(unsigned(HVSIZE(harc_EXEC)) * unsigned(MPSCLFAC(harc_EXEC)) - SIMD_RD_BYTES_wire(h), HVSIZE_READ(h)'length));
+                HVSIZE_READ_init(h) <= std_logic_vector(resize(unsigned(HVSIZE(harc_EXEC)) * unsigned(MPSCLFAC(harc_EXEC)), HVSIZE_READ(h)'length)); 
               
              
               ---COSINE SIMILARITY
@@ -1343,7 +1377,7 @@ begin
 
               else
                 if unsigned(HVSIZE(harc_EXEC)) >= SIMD_RD_BYTES_wire(h) then
-                  HVSIZE_READ(h) <= std_logic_vector(unsigned(HVSIZE(harc_EXEC)) - SIMD_RD_BYTES_wire(h));       -- decrement by SIMD_BYTE Execution Capability
+                  HVSIZE_READ(h) <= std_logic_vector(resize(unsigned(HVSIZE(harc_EXEC)) - SIMD_RD_BYTES_wire(h), HVSIZE_READ(h)'length));       -- decrement by SIMD_BYTE Execution Capability
                 else
                   HVSIZE_READ(h) <= (others => '0');                                                             -- decrement the remaining bytes
                 end if;
@@ -1359,12 +1393,15 @@ begin
               -- by preceding kmemld/kmemstr traffic. Otherwise HVSIZE_READ stays unknown
               -- and the HDC request collapses before the scratchpad becomes available.
               if decoded_instruction_DSP(HVCLIP_bit_position) = '1' then
-                HVSIZE_READ(h) <= std_logic_vector(resize(unsigned(HVSIZE(harc_EXEC)) * (32+2+PRECISION_BIT_WIDTH) + 8*SIMD_RD_BYTES_wire(h), HVSIZE_READ(h)'length));
-                HVSIZE_READ_init(h) <= std_logic_vector(resize(unsigned(HVSIZE(harc_EXEC)) * (32+2+PRECISION_BIT_WIDTH) + 8*SIMD_RD_BYTES_wire(h), HVSIZE_READ(h)'length));
-                HVSIZE_READ_init_clip(h) <= std_logic_vector(resize(unsigned(HVSIZE(harc_EXEC)) * (32+2+PRECISION_BIT_WIDTH) + 8*SIMD_RD_BYTES_wire(h), HVSIZE_READ(h)'length));
+                HVSIZE_READ(h) <= std_logic_vector(resize(unsigned(HVSIZE(harc_EXEC)) * CLIP_RD_BUDGET + 8*SIMD_RD_BYTES_wire(h), HVSIZE_READ(h)'length));
+                HVSIZE_READ_init(h) <= std_logic_vector(resize(unsigned(HVSIZE(harc_EXEC)) * CLIP_RD_BUDGET + 8*SIMD_RD_BYTES_wire(h), HVSIZE_READ(h)'length));
+                HVSIZE_READ_init_clip(h) <= std_logic_vector(resize(unsigned(HVSIZE(harc_EXEC)) * CLIP_RD_BUDGET + 8*SIMD_RD_BYTES_wire(h), HVSIZE_READ(h)'length));
               elsif decoded_instruction_DSP(HVENC_bit_position) = '1' then
                 RS1_Data_ptr(h) <= RS1_Data_IE;
                 RS2_Data_ptr(h) <= RS2_Data_IE;
+                enc_rd_row(h)    <= 0;  -- [20260928 encfix] dsp_exec re-issues chunk 0, row 0
+                enc_rd_rowoff(h) <= 0;
+                enc_rd_coff(h)   <= 0;
                 HVSIZE_READ(h) <= std_logic_vector(resize(unsigned(HVSIZE(harc_EXEC)) * unsigned(MPSCLFAC(h)), HVSIZE_READ(h)'length));
                 HVSIZE_READ_init(h) <= std_logic_vector(resize(unsigned(HVSIZE(harc_EXEC)) * unsigned(MPSCLFAC(h)), HVSIZE_READ(h)'length));
               elsif decoded_instruction_DSP(HVSIM_bit_position) = '1' then
@@ -1437,26 +1474,33 @@ begin
               ------------------------------- Increment the read addresses -------------------------------
 
               if to_integer(unsigned(HVSIZE_READ(h))) >= SIMD_RD_BYTES_wire(h) and hdc_data_gnt_i(h) = '1' then -- Increment the addresses untill all the vector elements are operated fetched
+
+                -- [20260928 encfix] ENCODE cursor: next row of the same chunk, or row 0 of the next chunk.
+                if decoded_instruction_DSP(HVENC_bit_position) = '1' then
+                  if enc_rd_row(h) + 1 < to_integer(unsigned(MPSCLFAC_HDC(h))) then
+                    enc_nrow    := enc_rd_row(h) + 1;
+                    enc_nrowoff := enc_rd_rowoff(h) + to_integer(unsigned(HVSIZE_READ_MASK(h)));
+                    enc_ncoff   := enc_rd_coff(h);
+                  else
+                    enc_nrow    := 0;
+                    enc_nrowoff := 0;
+                    enc_ncoff   := enc_rd_coff(h) + SIMD_RD_BYTES_wire(h);
+                  end if;
+                  enc_rd_row(h)    <= enc_nrow;
+                  enc_rd_rowoff(h) <= enc_nrowoff;
+                  enc_rd_coff(h)   <= enc_ncoff;
+                end if;
                 
                 ----------------------------------------- Source Register 1 -----------------------------------------
                 if vec_read_rs1_HDC(h) = '1' then
                             
                     --FHRR ENCODING
                   if decoded_instruction_DSP(HVENC_bit_position ) = '1' then
-                    if HVSIZE_READ(h) /= (Addr_Width downto 0 => 'U') and
-                       HVSIZE_READ_init(h) /= (Addr_Width downto 0 => 'U') then
-                      enc_next_row := ((to_integer(unsigned(HVSIZE_READ_init(h))) -
-                                        to_integer(unsigned(HVSIZE_READ(h)))) /
-                                       SIMD_RD_BYTES_wire(h)) + 1;
-                      RS1_Data_IE_lat(h) <= std_logic_vector(
-                        unsigned(RS1_Data_ptr(h)) + to_unsigned(enc_next_row * 4, RS1_Data_IE_lat(h)'length));
-                    end if;
+                    RS1_Data_IE_lat(h) <= std_logic_vector(
+                      unsigned(RS1_Data_ptr(h)) + to_unsigned(enc_nrow * 4, RS1_Data_IE_lat(h)'length));
 
                    elsif decoded_instruction_DSP(HVCLIP_bit_position ) = '1' then
-                        if (unsigned(HVSIZE_READ(h)) = (unsigned(HVSIZE_READ_init(h)) - SIMD_RD_BYTES_wire(h)*(32+2+PRECISION_BIT_WIDTH))) and (HVSIZE_READ(h) /= (Addr_Width downto 0 => 'U') ) then 
-                        RS1_Data_IE_lat(h) <= std_logic_vector(unsigned(RS1_Data_IE_lat(h)) + SIMD_RD_BYTES_wire(h));
-                        HVSIZE_READ_init(h) <= HVSIZE_READ(h); --init update so it can make calculation for next one
-                        end if;
+                        null;  -- [20260928 clipsync] address advanced on the divider start, see below
 
                   else -- Se non sto eseguendo un KDOTP incremento RS1 normalmente
 
@@ -1471,20 +1515,13 @@ begin
                   
                     --FHRR ENCODING 
                   if decoded_instruction_DSP(HVENC_bit_position ) = '1' then
-                    if HVSIZE_READ(h) /= (Addr_Width downto 0 => 'U') and
-                       HVSIZE_READ_init(h) /= (Addr_Width downto 0 => 'U') then
-                      enc_next_row := ((to_integer(unsigned(HVSIZE_READ_init(h))) -
-                                        to_integer(unsigned(HVSIZE_READ(h)))) /
-                                       SIMD_RD_BYTES_wire(h)) + 1;
-                      RS2_Data_IE_lat(h) <= std_logic_vector(
-                        unsigned(RS2_Data_ptr(h)) +
-                        to_unsigned(enc_next_row * to_integer(unsigned(HVSIZE(h))), RS2_Data_IE_lat(h)'length));
-                    end if;
+                    RS2_Data_IE_lat(h) <= std_logic_vector(
+                      unsigned(RS2_Data_ptr(h)) + to_unsigned(enc_nrowoff + enc_ncoff, RS2_Data_IE_lat(h)'length));
                     
 
                     elsif decoded_instruction_DSP(HVBUNDLE_bit_position) = '1' then
                     
-                      if (((to_integer(unsigned(HVSIZE_READ_init(h))) - to_integer(unsigned(HVSIZE_READ(h)))) / SIMD_RD_BYTES_wire(h)) mod 2 = 0) and (HVSIZE_READ(h) /= (Addr_Width downto 0 => 'U') )
+                      if (((to_integer(unsigned(HVSIZE_READ_init(h))) - to_integer(unsigned(HVSIZE_READ(h)))) / SIMD_RD_BYTES_wire(h)) mod 2 = 0) and (HVSIZE_READ(h) /= (HVR_MSB downto 0 => 'U') )
                          and ((to_integer(unsigned(HVSIZE_READ_init(h))) - to_integer(unsigned(HVSIZE_READ(h)))) / SIMD_RD_BYTES_wire(h)) >= 0
                          then
                           RS2_Data_IE_lat(h) <= std_logic_vector(unsigned(RS2_Data_IE_lat(h)) + SIMD_RD_BYTES_wire(h));
@@ -1493,9 +1530,7 @@ begin
                       end if;
 
                      elsif decoded_instruction_DSP(HVCLIP_bit_position ) = '1' then
-                        if (unsigned(HVSIZE_READ(h)) = (unsigned(HVSIZE_READ_init(h)) - SIMD_RD_BYTES_wire(h)*(32+2+PRECISION_BIT_WIDTH))) and (HVSIZE_READ(h) /= (Addr_Width downto 0 => 'U') ) then
-                        RS2_Data_IE_lat(h) <= std_logic_vector(unsigned(RS2_Data_IE_lat(h)) + SIMD_RD_BYTES_wire(h));
-                        end if;
+                        null;  -- [20260928 clipsync] address advanced on the divider start, see below
 
                     -- [Op-N2 Phase B] HVPERM keeps RS2_Data_IE_lat pinned at the
                     -- SPM base. dsp_exec computes the per-cycle SPM addresses
@@ -1533,6 +1568,14 @@ begin
                 if div_done(h)(0)(1) = '1' and
                    to_integer(unsigned(HVSIZE_WRITE(h))) > SIMD_RD_BYTES_wire(h) then
                   HVSIZE_READ_init_clip(h) <= std_logic_vector(unsigned(HVSIZE_READ_lat(h)) - SIMD_RD_BYTES_wire(h));
+                end if;
+                -- [20260928 clipsync] The divider of the current chunk starts in this cycle
+                -- (same condition as div_enable in the CLIP datapath): its operands are
+                -- captured, so the reads move to the next chunk. The next capture happens
+                -- ~50 cycles later, long after the new data is on the read bus.
+                if unsigned(HVSIZE_READ_lat(h)) + SIMD_RD_BYTES_wire(h) = unsigned(HVSIZE_READ_init_clip(h)) then
+                  RS1_Data_IE_lat(h) <= std_logic_vector(unsigned(RS1_Data_IE_lat(h)) + SIMD_RD_BYTES_wire(h));
+                  RS2_Data_IE_lat(h) <= std_logic_vector(unsigned(RS2_Data_IE_lat(h)) + SIMD_RD_BYTES_wire(h));
                 end if;
               end if;
 
@@ -1813,7 +1856,7 @@ begin
             elsif recover_state(h) = '1' then
               wb_ready(h) <= '1';  
             end if;
-            if HVSIZE_READ(h) > (0 to Addr_Width => '0') and enc_stage_1_en(h) = '0' then
+            if HVSIZE_READ(h) > (0 to HVR_MSB => '0') and enc_stage_1_en(h) = '0' then
               hdc_to_sc(h)(to_integer(unsigned(hdc_rs1_to_sc(h))))(0) <= '1';
               hdc_to_sc(h)(to_integer(unsigned(hdc_rs2_to_sc(h))))(1) <= '1';
               hdc_sci_req(h)(to_integer(unsigned(hdc_rs1_to_sc(h))))  <= '1';
@@ -1839,7 +1882,7 @@ begin
              elsif recover_state(h) = '1' then
                wb_ready(h) <= '1';
              end if;
-             if HVSIZE_READ(h) > (0 to Addr_Width => '0') then
+             if HVSIZE_READ(h) > (0 to HVR_MSB => '0') then
                hdc_to_sc(h)(to_integer(unsigned(hdc_rs1_to_sc(h))))(0) <= '1';
                hdc_to_sc(h)(to_integer(unsigned(hdc_rs2_to_sc(h))))(1) <= '1';
                hdc_sci_req(h)(to_integer(unsigned(hdc_rs1_to_sc(h)))) <= '1';
@@ -1865,13 +1908,15 @@ begin
 
            ----------------------------- ENCODING --------------------------------
            if decoded_instruction_DSP_lat(h)(HVENC_bit_position )  = '1' then
-            if enc_stage_4_en(h) = '1'  then 
+            -- [20260928 encfix] write chunk c while the accumulator still holds it
+            -- (the first row of chunk c+1 reloads it at the end of this cycle).
+            if enc_stage_3_en(h) = '1'  then 
               wb_ready(h) <= '1';
 
             elsif recover_state(h) = '1' then
               wb_ready(h) <= '1';  
             end if;
-            if HVSIZE_READ(h) > (0 to Addr_Width => '0') then
+            if HVSIZE_READ(h) > (0 to HVR_MSB => '0') then
               hdc_to_sc(h)(to_integer(unsigned(hdc_rs1_to_sc(h))))(0) <= '1';
               hdc_to_sc(h)(to_integer(unsigned(hdc_rs2_to_sc(h))))(1) <= '1';
               hdc_sci_req(h)(to_integer(unsigned(hdc_rs1_to_sc(h))))  <= '1';
@@ -1910,7 +1955,7 @@ begin
                  wb_ready(h) <= '1';
                end if;
              end if;
-             if HVSIZE_READ(h) > (0 to Addr_Width => '0') then
+             if HVSIZE_READ(h) > (0 to HVR_MSB => '0') then
               hdc_to_sc(h)(to_integer(unsigned(hdc_rs1_to_sc(h))))(0) <= '1';
               hdc_to_sc(h)(to_integer(unsigned(hdc_rs2_to_sc(h))))(1) <= '1';
               hdc_sci_req(h)(to_integer(unsigned(hdc_rs1_to_sc(h)))) <= '1';
@@ -1936,7 +1981,7 @@ begin
             elsif recover_state(h) = '1' then
               wb_ready(h) <= '1';
             end if;
-            if HVSIZE_READ(h) > (0 to Addr_Width => '0') then
+            if HVSIZE_READ(h) > (0 to HVR_MSB => '0') then
               hdc_to_sc(h)(to_integer(unsigned(hdc_rs1_to_sc(h))))(0) <= '1';
               hdc_to_sc(h)(to_integer(unsigned(hdc_rs2_to_sc(h))))(1) <= '1';
               hdc_sci_req(h)(to_integer(unsigned(hdc_rs1_to_sc(h)))) <= '1';
@@ -1977,7 +2022,7 @@ begin
             elsif recover_state(h) = '1' then
               wb_ready(h) <= '1';
             end if;
-            if HVSIZE_READ(h) > (0 to Addr_Width => '0') then
+            if HVSIZE_READ(h) > (0 to HVR_MSB => '0') then
               hdc_to_sc(h)(to_integer(unsigned(hdc_rs2_to_sc(h))))(1) <= '1';
               hdc_sci_req(h)(to_integer(unsigned(hdc_rs2_to_sc(h)))) <= '1';
               -- [Op-N2 Phase B timing fix 20260507] Use the registered chunk
@@ -2121,10 +2166,15 @@ begin
       if enc_en_wire(h) = '1' and enc_en(h) = '0' then
         enc_row_count(h) <= (others => '0');
       elsif enc_en(h) = '1' and enc_stage_1_en(h) = '1' then
-        enc_row_count(h) <= std_logic_vector(unsigned(enc_row_count(h)) + 1);
+        -- [20260928 encfix] row index within the current chunk, 1..F (wraps per chunk)
+        if to_integer(unsigned(enc_row_count(h))) >= to_integer(unsigned(MPSCLFAC_HDC(h))) then
+          enc_row_count(h) <= std_logic_vector(to_unsigned(1, enc_row_count(h)'length));
+        else
+          enc_row_count(h) <= std_logic_vector(unsigned(enc_row_count(h)) + 1);
+        end if;
       end if;
       if enc_stage_2_en(h) = '1' and
-         to_integer(unsigned(enc_row_count(h))) = to_integer(unsigned(MPSCLFAC(h))) then
+         to_integer(unsigned(enc_row_count(h))) = to_integer(unsigned(MPSCLFAC_HDC(h))) then
         enc_stage_3_en(h) <= enc_stage_2_en(h);
       
       else 
@@ -2136,9 +2186,9 @@ begin
       
       ------------- SIMILARITY ----------------
       sim_stage_1_en(h)      <= hdc_data_gnt_i_lat(h) and sim_en(h);
-      if (to_integer(unsigned(HVSIZE_READ_lat(h)))) = 0 and SIMD > 1 and HVSIZE_READ_lat(h) /= (Addr_Width downto 0 => 'U') then
+      if (to_integer(unsigned(HVSIZE_READ_lat(h)))) = 0 and SIMD > 1 and HVSIZE_READ_lat(h) /= (HVR_MSB downto 0 => 'U') then
       sim_stage_2_en(h)       <= sim_stage_1_en(h);
-      elsif to_integer(unsigned(HVSIZE_READ_lat(h)) - 4)= 0  and SIMD=1 and HVSIZE_READ_lat(h) /= (Addr_Width downto 0 => 'U')   then
+      elsif to_integer(unsigned(HVSIZE_READ_lat(h)) - 4)= 0  and SIMD=1 and HVSIZE_READ_lat(h) /= (HVR_MSB downto 0 => 'U')   then
       sim_stage_2_en(h)       <= sim_stage_1_en(h);
       else
       sim_stage_2_en(h)     <= '0';
@@ -3653,6 +3703,10 @@ FU_replicated : for f in fu_range generate
          if halt_hdc_lat(h) = '0' then
            if enc_en_wire(h) = '1' and enc_en(h) = '0' then
              accumulator_reg(f) <= (others => '0');
+           elsif enc_en(h) = '1' and enc_stage_2_en(h) = '1' and
+                 to_integer(unsigned(enc_row_count(h))) = 1 then
+             -- [20260928 encfix] first row of a chunk: restart the sum
+             accumulator_reg(f) <= trunc_mul_results(f);
            elsif enc_en(h) = '1' and (enc_stage_2_en(h) = '1' or recover_state_wires(h) = '1') then
              for i in 0 to SIMD-1 loop
                accumulator_reg(f)(8*i+7 downto 8*i) <=

@@ -242,13 +242,14 @@ add_row() {
   local status="$4"
   local result_line="$5"
   local log_path="$6"
-  local op sw_cycles hw_cycles hw_accel_cycles speedup
+  local op sw_cycles hw_cycles hw_accel_cycles speedup fu_speedup
 
   op="${OP_BY_TEST[${test_name}]}"
   sw_cycles="-"
   hw_cycles="-"
   hw_accel_cycles="-"
   speedup="-"
+  fu_speedup="-"
 
   if [[ -n "${result_line}" ]]; then
     op="$(field_value "${result_line}" "op")"
@@ -256,9 +257,10 @@ add_row() {
     hw_cycles="$(field_value "${result_line}" "hw_cycles")"
     hw_accel_cycles="$(field_value "${result_line}" "hw_accel_cycles")"
     speedup="$(field_value "${result_line}" "speedup")"
+    fu_speedup="$(field_value "${result_line}" "fu_speedup")"
   fi
 
-  SUMMARY_ROWS+=("| ${simd} | ${hv} | ${test_name} | ${op} | ${status} | ${sw_cycles:-"-"} | ${hw_cycles:-"-"} | ${hw_accel_cycles:-"-"} | ${speedup:-"-"} | ${log_path} |")
+  SUMMARY_ROWS+=("| ${simd} | ${hv} | ${test_name} | ${op} | ${status} | ${sw_cycles:-"-"} | ${hw_cycles:-"-"} | ${hw_accel_cycles:-"-"} | ${speedup:-"-"} | ${fu_speedup:-"-"} | ${log_path} |")
 }
 
 configure_build() {
@@ -418,8 +420,8 @@ repo_status="$(git_field status)"
   echo
   echo "  Results"
   echo
-  echo "| SIMD | HV elements | Test | Op | Status | SW cycles | HW cycles | HW accel cycles | Speedup SW/HW | Log |"
-  echo "|---:|---:|---|---|---|---:|---:|---:|---:|---|"
+  echo "| SIMD | HV elements | Test | Op | Status | SW cycles | HW cycles | HW accel cycles | Speedup SW/HW | FU speedup | Log |"
+  echo "|---:|---:|---|---|---|---:|---:|---:|---:|---:|---|"
   printf '%s\n' "${SUMMARY_ROWS[@]}"
 } >"${SUMMARY_FILE}"
 
