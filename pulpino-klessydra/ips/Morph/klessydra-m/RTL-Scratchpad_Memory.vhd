@@ -11,8 +11,6 @@
 --  Each SPM bank has a read and write port which is 32-bits wide, and the mems are implemented in BRAMs       --
 -----------------------------------------------------------------------------------------------------------------
 
-
--- ieee packages ------------
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.std_logic_unsigned.all;
@@ -22,6 +20,7 @@ use std.textio.all;
 -- local packages ------------
 use work.riscv_klessydra.all;
 --use work.klessydra_parameters.all;
+
 
 ---------------------------------------------------------------------------------------------------
 entity Scratchpad_memory is
@@ -36,11 +35,11 @@ entity Scratchpad_memory is
   );
   port(
     clk_i          : in  std_logic;
-    sc_we          : in  array_2d(ACCL_NUM - 1 downto 0)(SIMD*SPM_NUM-1 downto 0);
-    sc_addr_wr     : in  array_3d(ACCL_NUM - 1 downto 0)(SIMD*SPM_NUM-1 downto 0)(Addr_Width-(SIMD_BITS+3) downto 0);
-    sc_addr_rd     : in  array_3d(ACCL_NUM - 1 downto 0)(SIMD*SPM_NUM-1 downto 0)(Addr_Width-(SIMD_BITS+3) downto 0);
-    sc_data_wr     : in  array_3d(ACCL_NUM - 1 downto 0)(SIMD*SPM_NUM-1 downto 0)(Data_Width-1 downto 0);
-    sc_data_rd     : out array_3d(ACCL_NUM - 1 downto 0)(SIMD*SPM_NUM-1 downto 0)(Data_Width-1 downto 0)
+    sc_we          : in  array_2d(ACCL_NUM-1 downto 0)(SIMD*SPM_NUM-1 downto 0);
+    sc_addr_wr     : in  array_3d(ACCL_NUM-1 downto 0)(SIMD*SPM_NUM-1 downto 0)(Addr_Width-(SIMD_BITS+3) downto 0);
+    sc_addr_rd     : in  array_3d(ACCL_NUM-1 downto 0)(SIMD*SPM_NUM-1 downto 0)(Addr_Width-(SIMD_BITS+3) downto 0);
+    sc_data_wr     : in  array_3d(ACCL_NUM-1 downto 0)(SIMD*SPM_NUM-1 downto 0)(Data_Width-1 downto 0);
+    sc_data_rd     : out array_3d(ACCL_NUM-1 downto 0)(SIMD*SPM_NUM-1 downto 0)(Data_Width-1 downto 0)
     );
 end Scratchpad_memory;
 
@@ -58,19 +57,19 @@ begin
 
  --------- replicate logic three times --------------------------------
   spm_replicas : for g in accl_range generate 
-    spm_banks    : for h in 0 to SIMD*SPM_NUM -1 generate 
-      
-      write_logic: process(clk_i) -- 
-      begin
-        if (clk_i'event and clk_i='1') then
-          sc_data_rd(g)(h) <= mem(g*SIMD*SPM_NUM + h)(to_integer(unsigned(sc_addr_rd(g)(h))));
-          if sc_we(g)(h) = '1' then         --write mode
-            mem(g*SIMD*SPM_NUM + h)(to_integer(unsigned(sc_addr_wr(g)(h)))) <= sc_data_wr(g)(h);
-          end if; -- we
-        end if; -- clk
-      end process;
+  spm_banks    : for h in 0 to SIMD*SPM_NUM -1 generate 
+    
+    write_logic: process(clk_i) -- 
+    begin
+      if (clk_i'event and clk_i='1') then
+         sc_data_rd(g)(h) <= mem(g*SIMD*SPM_NUM + h)(to_integer(unsigned(sc_addr_rd(g)(h))));
+        if sc_we(g)(h) = '1' then         --write mode
+          mem(g*SIMD*SPM_NUM + h)(to_integer(unsigned(sc_addr_wr(g)(h)))) <= sc_data_wr(g)(h);
+        end if; -- we
+      end if; -- clk
+    end process;
 
-    end generate spm_banks;
+  end generate spm_banks;
   end generate spm_replicas;
   -- end of replicated logic --------------------------------------------
 

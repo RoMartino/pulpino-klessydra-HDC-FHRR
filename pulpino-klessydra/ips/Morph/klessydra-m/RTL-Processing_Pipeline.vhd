@@ -40,6 +40,7 @@ entity Pipeline is
     btb_len                    : natural;
     superscalar_exec_en        : natural;
     accl_en                    : natural;
+    accl_sel                   : natural;
     replicate_accl_en          : natural;
     multithreaded_accl_en      : natural;
     SPM_NUM                    : natural;  
@@ -72,7 +73,7 @@ entity Pipeline is
     csr_instr_done             : in  std_logic;
     csr_access_denied_o        : in  std_logic;
     csr_rdata_o                : in  std_logic_vector (31 downto 0);
-    HVSIZE                     : in  array_2d(THREAD_POOL_SIZE-1 downto 0)(Addr_Width downto 0);
+    MVSIZE                     : in  array_2d(THREAD_POOL_SIZE-1 downto 0)(Addr_Width downto 0);
     MVTYPE                     : in  array_2d(THREAD_POOL_SIZE-1 downto 0)(3 downto 0);
     MPSCLFAC                   : in  array_2d(THREAD_POOL_SIZE-1 downto 0)(4 downto 0);
     MHARTID                    : in  array_2d(THREAD_POOL_SIZE-1 downto 0)(9  downto 0);
@@ -89,19 +90,16 @@ entity Pipeline is
     pc_IE                      : out std_logic_vector(31 downto 0);
     ie_except_data             : out std_logic_vector(31 downto 0);
     ls_except_data             : out std_logic_vector(31 downto 0);
-    hdc_except_data            : out array_2d(ACCL_NUM-1 downto 0)(31 downto 0);
+    dsp_except_data            : out array_2d(ACCL_NUM-1 downto 0)(31 downto 0);
     taken_branch               : out std_logic;
     ie_taken_branch            : out std_logic;
     ls_taken_branch            : out std_logic;
-    hdc_taken_branch_BSC       : in  std_logic_vector(ACCL_NUM-1 downto 0);
-    hdc_taken_branch_MCR       : in  std_logic_vector(ACCL_NUM-1 downto 0);
-    hdc_taken_branch_FHRR      : in  std_logic_vector(ACCL_NUM-1 downto 0);
-    hdc_taken_branch_DSP       : in  std_logic_vector(ACCL_NUM-1 downto 0);
+    dsp_taken_branch           : in  std_logic_vector(ACCL_NUM-1 downto 0);
     set_branch_condition       : out std_logic;
     set_except_condition       : out std_logic;
     ie_except_condition        : out std_logic;
     ls_except_condition        : out std_logic;
-    hdc_except_condition       : in  std_logic_vector(ACCL_NUM-1 downto 0);
+    dsp_except_condition       : in  std_logic_vector(ACCL_NUM-1 downto 0);
     set_mret_condition         : out std_logic;
     set_wfi_condition          : out std_logic;
     csr_instr_req              : out std_logic;
@@ -173,19 +171,17 @@ entity Pipeline is
     rs1_to_sc                  : out std_logic_vector(SPM_ADDR_WID-1 downto 0);
     rs2_to_sc                  : out std_logic_vector(SPM_ADDR_WID-1 downto 0);
     rd_to_sc                   : out std_logic_vector(SPM_ADDR_WID-1 downto 0);
-    decoded_instruction        : out std_logic_vector(HDC_UNIT_INSTR_SET_SIZE-1 downto 0);
-    decoded_instruction_FHRR   : out std_logic_vector(FHRR_UNIT_INSTR_SET_SIZE-1 downto 0);
-    decoded_instruction_MCR    : out std_logic_vector(MCR_UNIT_INSTR_SET_SIZE-1 downto 0);
+    decoded_instruction_DSP    : out std_logic_vector(DSP_UNIT_INSTR_SET_SIZE-1 downto 0);
     RS1_Data_IE                : out std_logic_vector(31 downto 0);
     RS2_Data_IE                : out std_logic_vector(31 downto 0);
     RD_Data_IE                 : out std_logic_vector(31 downto 0);  -- unused
-    hdc_instr_req              : out std_logic_vector(ACCL_NUM-1 downto 0);
+    dsp_instr_req              : out std_logic_vector(ACCL_NUM-1 downto 0);
     spm_rs1                    : out std_logic;
     spm_rs2                    : out std_logic;
     vec_read_rs1_ID            : out std_logic;
     vec_read_rs2_ID            : out std_logic;
     vec_write_rd_ID            : out std_logic;
-    busy_HDC                   : in  std_logic_vector(ACCL_NUM-1 downto 0);
+    busy_DSP                   : in  std_logic_vector(ACCL_NUM-1 downto 0);
     state_LS                   : out fsm_LS_states;
     sc_word_count_wire         : out integer;
     spm_bcast                  : out std_logic;
@@ -224,10 +220,10 @@ architecture Pipe of Pipeline is
     7 => "execution_7.txt"
   );
 
- signal RS1_Data_FLOAT         : std_logic_vector(fp_size-1 downto 0); 
- signal RS2_Data_FLOAT         : std_logic_vector(fp_size-1 downto 0);
- signal RD_Data_FLOAT          : std_logic_vector(fp_size-1 downto 0);
- signal fp_regfile             : array_3d(THREAD_POOL_SIZE-1 downto 0)(RF_SIZE-1 downto 0)(31 downto 0);
+  signal RS1_Data_FLOAT         : std_logic_vector(fp_size-1 downto 0);
+  signal RS2_Data_FLOAT         : std_logic_vector(fp_size-1 downto 0);
+  signal RD_Data_FLOAT          : std_logic_vector(fp_size-1 downto 0);
+  signal fp_regfile             : array_3d(THREAD_POOL_SIZE-1 downto 0)(RF_SIZE-1 downto 0)(31 downto 0);
 
   signal rs1_valid_ID           : std_logic;
   signal rs2_valid_ID           : std_logic;
@@ -235,7 +231,7 @@ architecture Pipe of Pipeline is
   signal rd_read_valid_ID       : std_logic;
 
   signal state_IE               : fsm_IE_states;
-  signal state_HDC              : array_2d(accl_range)(1 downto 0);
+  signal state_DSP              : array_2d(accl_range)(1 downto 0);
   signal instr_rvalid_state     : std_logic;
   signal busy_ID                : std_logic;
   signal core_busy_IE           : std_logic;
@@ -321,14 +317,14 @@ architecture Pipe of Pipeline is
   signal CORE_STATE_FETCH       : std_logic_vector(THREAD_POOL_BASELINE downto 0);
   signal CORE_STATE_ID          : std_logic_vector(THREAD_POOL_BASELINE downto 0);
 
-  -- hdc Unit Signals
-  signal hdc_sc_data_read       : array_3d(accl_range)(1 downto 0)(SIMD_Width-1 downto 0);
-  signal hdc_sc_read_addr       : array_3d(accl_range)(1 downto 0)(Addr_Width-1 downto 0);
-  signal hdc_to_sc              : array_3d(accl_range)(SPM_NUM-1 downto 0)(1 downto 0);
-  signal hdc_sc_write_addr      : array_2d(accl_range)(Addr_Width-1 downto 0);
-  signal hdc_sc_data_write_wire : array_2d(accl_range)(SIMD_Width - 1 downto 0);
-  signal hdc_sci_req            : array_2d(accl_range)(SPM_NUM-1 downto 0);
-  signal hdc_sci_we             : array_2d(accl_range)(SPM_NUM-1 downto 0);
+  -- DSP Unit Signals
+  signal dsp_sc_data_read       : array_3d(accl_range)(1 downto 0)(SIMD_Width-1 downto 0);
+  signal dsp_sc_read_addr       : array_3d(accl_range)(1 downto 0)(Addr_Width-1 downto 0);
+  signal dsp_to_sc              : array_3d(accl_range)(SPM_NUM-1 downto 0)(1 downto 0);
+  signal dsp_sc_write_addr      : array_2d(accl_range)(Addr_Width-1 downto 0);
+  signal dsp_sc_data_write_wire : array_2d(accl_range)(SIMD_Width - 1 downto 0);
+  signal dsp_sci_req            : array_2d(accl_range)(SPM_NUM-1 downto 0);
+  signal dsp_sci_we             : array_2d(accl_range)(SPM_NUM-1 downto 0);
 
   -- instruction operands
   signal CSR_ADDR_IE        : std_logic_vector(11 downto 0);  -- unused
@@ -394,8 +390,7 @@ architecture Pipe of Pipeline is
 
   signal branch_taken                : std_logic;
   signal branch_predict_taken_ID     : std_logic; 
-  signal branch_predict_taken_IE     : std_logic;
-  signal dbg_req_o                   : std_logic; 
+  signal branch_predict_taken_IE     : std_logic; 
 
   signal halt_update_FETCH           : std_logic_vector(harc_range);
   signal halt_update_IE              : std_logic_vector(harc_range);
@@ -493,6 +488,7 @@ architecture Pipe of Pipeline is
     btb_en                     : natural;
     superscalar_exec_en        : natural;
     accl_en                    : natural;
+    accl_sel                   : natural;
     replicate_accl_en          : natural;
     SPM_NUM                    : natural;  
     Addr_Width                 : natural;
@@ -508,13 +504,11 @@ architecture Pipe of Pipeline is
     comparator_en              : out std_logic;
     ls_instr_req               : out std_logic;
     ie_instr_req               : out std_logic;
-    hdc_instr_req              : out std_logic_vector(ACCL_NUM-1 downto 0);
+    dsp_instr_req              : out std_logic_vector(ACCL_NUM-1 downto 0);
     decoded_branching_instr    : in  std_logic_vector(BRANCHING_INSTR_SET_SIZE-1 downto 0);
     decoded_instruction_IE     : out std_logic_vector(EXEC_UNIT_INSTR_SET_SIZE-1 downto 0);
-    decoded_instruction_LS     : Out std_logic_vector(LS_UNIT_INSTR_SET_SIZE-1 downto 0);
-    decoded_instruction        : out std_logic_vector(HDC_UNIT_INSTR_SET_SIZE-1 downto 0);
-    decoded_instruction_FHRR   : out std_logic_vector(FHRR_UNIT_INSTR_SET_SIZE-1 downto 0);
-    decoded_instruction_MCR    : out std_logic_vector(MCR_UNIT_INSTR_SET_SIZE-1 downto 0);
+    decoded_instruction_LS     : out std_logic_vector(LS_UNIT_INSTR_SET_SIZE-1 downto 0);
+    decoded_instruction_DSP    : out std_logic_vector(DSP_UNIT_INSTR_SET_SIZE-1 downto 0);
     data_be_ID                 : out std_logic_vector(3 downto 0);
     data_width_ID              : out std_logic_vector(1 downto 0);
     amo_store                  : in  std_logic;
@@ -544,7 +538,7 @@ architecture Pipe of Pipeline is
     core_busy_LS               : in  std_logic;
     busy_LS                    : in  std_logic;
     busy_FPU                   : in  std_logic;
-    busy_hdc                   : in  std_logic_vector(ACCL_NUM-1 downto 0);
+    busy_DSP                   : in  std_logic_vector(ACCL_NUM-1 downto 0);
     busy_ID                    : out std_logic;
     ls_parallel_exec           : out std_logic;
     fpu_parallel_exec          : out std_logic;
@@ -593,7 +587,7 @@ architecture Pipe of Pipeline is
     PC_offset_ID               : out std_logic_vector(31 downto 0);
     set_branch_condition_ID    : out std_logic;
     zero_rd                    : out std_logic;
-    float_instr_req            : out std_logic;
+    float_instr_req            : out std_logic; 
     decoded_instruction_FLOAT  : out std_logic_vector(FP_UNIT_INSTR_SET_SIZE-1 downto 0); 
     flush_hart_ID              : in  std_logic_vector(THREAD_POOL_SIZE-1 downto 0);
     branch_predict_taken_ID    : in  std_logic; 
@@ -742,7 +736,6 @@ architecture Pipe of Pipeline is
     pass_BGE                  : in  std_logic;
     pass_BGEU                 : in  std_logic;
     ie_instr_req              : in  std_logic;
-    dbg_req_o                 : in std_logic;
     MHARTID                   : in  array_2d(harc_range)(9 downto 0);
     MSTATUS                   : in  array_2d(harc_range)(1 downto 0);
     MPIP                      : in  array_2d(harc_range)(THREAD_POOL_SIZE_GLOBAL-1 downto 0);
@@ -877,11 +870,11 @@ architecture Pipe of Pipeline is
     MUL_WB_EN                  : in  std_logic;
     FP_LS_WB_EN                : in  std_logic;
     FP_RES_WB_EN               : in  std_logic;
-    FP_LS_WB                   : in  std_logic_vector(fp_size-1 downto 0);
     IE_WB                      : in  std_logic_vector(31 downto 0);
     MUL_WB                     : in  std_logic_vector(31 downto 0);
     LS_WB                      : in  std_logic_vector(31 downto 0);
     FP_RES_WB                  : in  std_logic_vector(fp_size-1 downto 0);
+    FP_LS_WB                   : in  std_logic_vector(fp_size-1 downto 0);
     instr_word_LS_WB           : in  std_logic_vector(31 downto 0);
     instr_word_IE_WB           : in  std_logic_vector(31 downto 0);
     instr_word_FP_RES_WB       : in  std_logic_vector(31 downto 0);
@@ -920,20 +913,15 @@ begin
 
   -- check for microarchitecture configuration limit, up to 16 thread support.
   assert THREAD_POOL_SIZE < 2**THREAD_ID_SIZE
-    report "Threading configuration not supported" 
+    report "Threading configuration not supported"
   severity error;
 
-  set_except_condition <= '1' when (IE_except_condition = '1' or LS_except_condition = '1' or HDC_except_condition /= (accl_range => '0')) else '0';
+  set_except_condition <= '1' when (IE_except_condition = '1' or LS_except_condition = '1' or DSP_except_condition /= (accl_range => '0')) else '0';
 
   flush_hart_ID    <= IE_flush_hart_ID    or LSU_flush_hart_ID;
   flush_hart_FETCH <= IE_flush_hart_FETCH or LSU_flush_hart_FETCH;
 
-  taken_branch <= '1' when (ie_taken_branch = '1' or ls_taken_branch = '1' or 
-                      unsigned(hdc_taken_branch_BSC) /= 0 or 
-                      unsigned(hdc_taken_branch_MCR) /= 0 or 
-                      unsigned(hdc_taken_branch_FHRR) /= 0 or 
-                      unsigned(hdc_taken_branch_DSP) /= 0) 
-                      else '0';
+  taken_branch <= '1' when (ie_taken_branch = '1' or ls_taken_branch = '1' or unsigned(dsp_taken_branch) /= 0) else '0';
           
   csr_wdata_i <= ie_csr_wdata_i;
 
@@ -1030,6 +1018,7 @@ begin
     btb_en                     => btb_en,
     superscalar_exec_en        => superscalar_exec_en,
     accl_en                    => accl_en,
+    accl_sel                   => accl_sel,
     replicate_accl_en          => replicate_accl_en,
     SPM_NUM                    => SPM_NUM,  
     Addr_Width                 => Addr_Width,
@@ -1044,13 +1033,11 @@ begin
     comparator_en              => comparator_en,
     ie_instr_req               => ie_instr_req,        
     ls_instr_req               => ls_instr_req,        
-    hdc_instr_req              => hdc_instr_req,
+    dsp_instr_req              => dsp_instr_req,
     decoded_branching_instr    => decoded_branching_instr,
     decoded_instruction_IE     => decoded_instruction_IE, 
     decoded_instruction_LS     => decoded_instruction_LS, 
-    decoded_instruction        => decoded_instruction,
-    decoded_instruction_FHRR   => decoded_instruction_FHRR,  -- BUG5 fix [20260728]: was unmapped -> FHRR unit input undriven -> HDCU handshake hang
-    decoded_instruction_MCR    => decoded_instruction_MCR,   -- BUG5 fix [20260728]
+    decoded_instruction_DSP    => decoded_instruction_DSP,
     data_be_ID                 => data_be_ID,
     data_width_ID              => data_width_ID,
     amo_store                  => amo_store,
@@ -1079,7 +1066,7 @@ begin
     core_busy_LS               => core_busy_LS,
     busy_LS                    => busy_LS,
     busy_FPU                   => busy_FPU,
-    busy_HDC                   => busy_HDC,
+    busy_DSP                   => busy_DSP,
     busy_ID                    => busy_ID,
     ls_parallel_exec           => ls_parallel_exec,
     fpu_parallel_exec          => fpu_parallel_exec,
@@ -1155,12 +1142,12 @@ begin
     )
   port map(
     clk_i                      => clk_i,
-    rst_ni                     => rst_ni,    
+    rst_ni                     => rst_ni,
     irq_pending                => irq_pending,
-    instr_word_IE              => instr_word_IE,                  
-    pc_IE                      => pc_IE,   
-    RS1_Data_IE                => RS1_Data_IE,           
-    RS2_Data_IE                => RS2_Data_IE,           
+    instr_word_IE              => instr_word_IE,
+    pc_IE                      => pc_IE,
+    RS1_Data_IE                => RS1_Data_IE,
+    RS2_Data_IE                => RS2_Data_IE,
     RD_Data_IE                 => RD_Data_IE,
     RS2_Data_FLOAT             => RS2_Data_FLOAT,
     decoded_instruction_LS     => decoded_instruction_LS,
@@ -1177,7 +1164,7 @@ begin
     load_op                    => load_op,
     store_op                   => store_op,
     --sw_mip                     => sw_mip,
-    core_busy_LS               => core_busy_LS,               
+    core_busy_LS               => core_busy_LS,
     busy_LS                    => busy_LS,
     rs1_to_sc                  => rs1_to_sc,
     rs2_to_sc                  => rs2_to_sc,
@@ -1293,7 +1280,6 @@ begin
     pass_BGE                   => pass_BGE,
     pass_BGEU                  => pass_BGEU,
     ie_instr_req               => ie_instr_req,
-    dbg_req_o                  => dbg_req_o,
     MHARTID                    => MHARTID,
     MSTATUS                    => MSTATUS,
     MPIP                       => MPIP,
@@ -1379,13 +1365,13 @@ begin
     pc_ID                      => pc_ID,
     data_dependency            => data_dependency,
     bypass_rs1                 => bypass_rs1,
-    bypass_rs2                 => bypass_rs2,        
-    bypass_rd_read             => bypass_rd_read,  
-    bypass_fp_rs1              => bypass_fp_rs1,      
+    bypass_rs2                 => bypass_rs2,
+    bypass_rd_read             => bypass_rd_read,
+    bypass_fp_rs1              => bypass_fp_rs1,
     bypass_fp_rs2              => bypass_fp_rs2,
     bypass_fp_rd_read          => bypass_fp_rd_read,
     jalr_stall                 => jalr_stall,
-    branch_stall               => branch_stall, 
+    branch_stall               => branch_stall,
     core_busy_IE               => core_busy_IE,
     core_busy_LS               => core_busy_LS,
     ls_parallel_exec           => ls_parallel_exec,
@@ -1400,11 +1386,11 @@ begin
     MUL_WB_EN                  => MUL_WB_EN,
     FP_RES_WB_EN               => FP_RES_WB_EN,
     FP_LS_WB_EN                => FP_LS_WB_EN,
-    FP_LS_WB                   => FP_LS_WB,
     IE_WB                      => IE_WB,
     MUL_WB                     => MUL_WB,
     LS_WB                      => LS_WB,
     FP_RES_WB                  => FP_RES_WB,
+    FP_LS_WB                   => FP_LS_WB,
     instr_word_LS_WB           => instr_word_LS_WB,
     instr_word_IE_WB           => instr_word_IE_WB,
     instr_word_FP_RES_WB       => instr_word_FP_RES_WB,
@@ -1431,7 +1417,7 @@ begin
     rd_to_sc                   => rd_to_sc,
     data_addr_internal_IE      => data_addr_internal_IE,
     regfile                    => regfile,
-    fp_regfile                 => fp_regfile   
+    fp_regfile                 => fp_regfile
   );
   
   ---------------------------------------------------------
@@ -1771,8 +1757,8 @@ begin
                 write(row0, string'(",x"));
                 write(row0, rs1(instr_word_IE));
                 case CSR_ADDR(instr_word_IE) is
-                  when HVSIZE_addr =>
-                    write(row0, string'(",HVSIZE"));
+                  when MVSIZE_addr =>
+                    write(row0, string'(",mvsize"));
                   when MPSCLFAC_addr =>
                     write(row0, string'(",mpsclfac"));
                   when MSTATUS_addr =>
@@ -2038,21 +2024,21 @@ begin
               hwrite(row0, tracer_result);
             end if;
 
-            if decoded_instruction_LS(HVMEMLD_bit_position)   = '1' then
-              write(row0, string'("    hvmemld x"));
+            if decoded_instruction_LS(KMEMLD_bit_position)   = '1' then
+              write(row0, string'("    kmemld x"));
             end if;
 
-           if decoded_instruction_LS(HVBCASTLD_bit_position) = '1' then
-             write(row0, string'("    hvbcastld x"));
+           if decoded_instruction_LS(KBCASTLD_bit_position) = '1' then
+             write(row0, string'("    kbcastld x"));
             end if;
 
-            if decoded_instruction_LS(HVMEMSTR_bit_position) = '1' then
-              write(row0, string'("    hvmemstr x"));
+            if decoded_instruction_LS(KMEMSTR_bit_position) = '1' then
+              write(row0, string'("    kmemstr x"));
             end if;
 
-            if decoded_instruction_LS(HVMEMLD_bit_position)   = '1' or
-               decoded_instruction_LS(HVBCASTLD_bit_position) = '1' or 
-               decoded_instruction_LS(HVMEMSTR_bit_position)  = '1' then
+            if decoded_instruction_LS(KMEMLD_bit_position)   = '1' or
+               decoded_instruction_LS(KBCASTLD_bit_position) = '1' or 
+               decoded_instruction_LS(KMEMSTR_bit_position)  = '1' then
               write(row0, rd(instr_word_IE));
               write(row0, string'(",x"));
               write(row0, rs1(instr_word_IE));
@@ -2083,58 +2069,76 @@ begin
       -----------------------------------------------------------------------------
       if accl_en = 1 then
           for h in accl_range loop
-            if hdc_instr_req(h) = '1' and instr_word_IE /= x"0000_006F" then -- checks that the valid hdc instruction did not to execute as an infinite jump
+            if dsp_instr_req(h) = '1' and instr_word_IE /= x"0000_006F" then -- checks that the valid dsp instruction did not to execute as an infinite jump
               write(row0, "   " & to_string(now, ns) & "  ");  --Add a timestamp to line
               write(row0, ht);
               hwrite(row0, pc_IE);
               write(row0, '_');
               hwrite(row0, instr_word_IE);
-              -- Set signals to enable correct virtual parallelism operation
-              if decoded_instruction(HVBUNDLE_bit_position)       = '1' then
-                write(row0, string'("    hvbundle x"));
-              elsif decoded_instruction(HVBIND_bit_position) = '1' then
-                write(row0, string'("    hvbind x"));
-              elsif decoded_instruction(HVSIM_bit_position) = '1' then
-                write(row0, string'("    hvsim x"));
-              elsif decoded_instruction(HVCLIP_bit_position)    = '1' then
-                write(row0, string'("    hvclip x"));
-              elsif decoded_instruction(HVPERM_bit_position)    = '1' then
-                write(row0, string'("    ksvmulrf x"));
-              elsif decoded_instruction(KSVADDSC_bit_position) = '1' then
-                write(row0, string'("    ksvaddsc x"));
-              elsif decoded_instruction(KSVMULSC_bit_position) = '1' then
-                write(row0, string'("    ksvmulsc x"));
-              elsif decoded_instruction(KSRLV_bit_position)    = '1' then
-                write(row0, string'("    ksrlv x"));
-              elsif decoded_instruction(KSRAV_bit_position)    = '1' then
-                write(row0, string'("    ksrav x"));
-              elsif decoded_instruction(KVRED_bit_position)    = '1' then
-                write(row0, string'("    kvred x"));
-              elsif decoded_instruction(HVSEARCH_bit_position)    = '1' then
-                write(row0, string'("    kdotp x"));
-              elsif decoded_instruction(KDOTPPS_bit_position)  = '1' then
-                write(row0, string'("    kdotpps x"));
-              elsif decoded_instruction(KRELU_bit_position)    = '1' then
-                write(row0, string'("    krelu x"));
-              elsif decoded_instruction(KVSLT_bit_position)    = '1' then
-                write(row0, string'("    kvslt x"));
-              elsif decoded_instruction(KSVSLT_bit_position)   = '1' then
-                write(row0, string'("    ksvslt x"));
-              elsif decoded_instruction(KBCAST_bit_position)   = '1' then
-                write(row0, string'("    kbcast x"));
-              elsif decoded_instruction(KVCP_bit_position)     = '1' then
-                write(row0, string'("    kvcp x"));
-              end if;
+              if accl_sel = ACCL_SEL_DSP then
+                if decoded_instruction_DSP(KADDV_bit_position)       = '1' then
+                  write(row0, string'("    kaddv x"));
+                elsif decoded_instruction_DSP(KSVADDRF_bit_position) = '1' then
+                  write(row0, string'("    ksvaddrf x"));
+                elsif decoded_instruction_DSP(KSVADDSC_bit_position) = '1' then
+                  write(row0, string'("    ksvaddsc x"));
+                elsif decoded_instruction_DSP(KSUBV_bit_position)    = '1' then
+                  write(row0, string'("    ksubv x"));
+                elsif decoded_instruction_DSP(KVMUL_bit_position)    = '1' then
+                  write(row0, string'("    kvmul x"));
+                elsif decoded_instruction_DSP(KSVMULRF_bit_position) = '1' then
+                  write(row0, string'("    ksvmulrf x"));
+                elsif decoded_instruction_DSP(KSVMULSC_bit_position) = '1' then
+                  write(row0, string'("    ksvmulsc x"));
+                elsif decoded_instruction_DSP(KSRLV_bit_position)    = '1' then
+                  write(row0, string'("    ksrlv x"));
+                elsif decoded_instruction_DSP(KSRAV_bit_position)    = '1' then
+                  write(row0, string'("    ksrav x"));
+                elsif decoded_instruction_DSP(KVRED_bit_position)    = '1' then
+                  write(row0, string'("    kvred x"));
+                elsif decoded_instruction_DSP(KDOTP_bit_position)    = '1' then
+                  write(row0, string'("    kdotp x"));
+                elsif decoded_instruction_DSP(KDOTPPS_bit_position)  = '1' then
+                  write(row0, string'("    kdotpps x"));
+                elsif decoded_instruction_DSP(KRELU_bit_position)    = '1' then
+                  write(row0, string'("    krelu x"));
+                elsif decoded_instruction_DSP(KVSLT_bit_position)    = '1' then
+                  write(row0, string'("    kvslt x"));
+                elsif decoded_instruction_DSP(KSVSLT_bit_position)   = '1' then
+                  write(row0, string'("    ksvslt x"));
+                elsif decoded_instruction_DSP(KBCAST_bit_position)   = '1' then
+                  write(row0, string'("    kbcast x"));
+                elsif decoded_instruction_DSP(KVCP_bit_position)     = '1' then
+                  write(row0, string'("    kvcp x"));
+                end if;
 
-              if decoded_instruction(KVRED_bit_position)  = '1'  or
-                 decoded_instruction(KRELU_bit_position)  = '1'  or
-                 decoded_instruction(KBCAST_bit_position) = '1'  or
-                 decoded_instruction(KVCP_bit_position)   = '1'  or
-                 FUNCT7(instr_word_IE) = KBCAST then
-                write(row0, rd(instr_word_IE));
-                write(row0, string'(",x"));
-                write(row0, rs1(instr_word_IE));
+                if decoded_instruction_DSP(KVRED_bit_position)  = '1'  or
+                   decoded_instruction_DSP(KRELU_bit_position)  = '1'  or
+                   decoded_instruction_DSP(KBCAST_bit_position) = '1'  or
+                   decoded_instruction_DSP(KVCP_bit_position)   = '1'  or
+                   FUNCT7(instr_word_IE) = KBCAST then
+                  write(row0, rd(instr_word_IE));
+                  write(row0, string'(",x"));
+                  write(row0, rs1(instr_word_IE));
+                else
+                  write(row0, rd(instr_word_IE));
+                  write(row0, string'(",x"));
+                  write(row0, rs1(instr_word_IE));
+                  write(row0, string'(",x"));
+                  write(row0, rs2(instr_word_IE));
+                end if;
               else
+                if decoded_instruction_DSP(HVBUNDLE_bit_position) = '1' then
+                  write(row0, string'("    hvbundle x"));
+                elsif decoded_instruction_DSP(HVBIND_bit_position) = '1' then
+                  write(row0, string'("    hvbind x"));
+                elsif decoded_instruction_DSP(HVSIM_bit_position) = '1' then
+                  write(row0, string'("    hvsim x"));
+                elsif decoded_instruction_DSP(HVCLIP_bit_position) = '1' then
+                  write(row0, string'("    hvclip x"));
+                elsif decoded_instruction_DSP(HVENC_bit_position) = '1' then
+                  write(row0, string'("    hvenc x"));
+                end if;
                 write(row0, rd(instr_word_IE));
                 write(row0, string'(",x"));
                 write(row0, rs1(instr_word_IE));
@@ -2163,10 +2167,10 @@ begin
                 write(row0, string'("      RF_rs2=0x"));
                 hwrite(row0, RS2_Data_IE);
               end if;
-              write(row0, string'("      HVSIZE=0x"));
-              hwrite(row0, HVSIZE(h));
+              write(row0, string'("      MVSIZE=0x"));
+              hwrite(row0, MVSIZE(h));
               write(row0, string'("(0d'"));
-              write(row0, to_integer(unsigned(HVSIZE(h))));
+              write(row0, to_integer(unsigned(MVSIZE(h))));
               write(row0, string'(")"));
            end if;
          end loop;
@@ -2545,15 +2549,15 @@ begin
             tracer_result <= RS1_Data_IE;
           end if;
 
-          if decoded_instruction_LS(HVMEMLD_bit_position)   = '1' or
-             decoded_instruction_LS(HVBCASTLD_bit_position) = '1' then
+          if decoded_instruction_LS(KMEMLD_bit_position)   = '1' or
+             decoded_instruction_LS(KBCASTLD_bit_position) = '1' then
             rs1_valid           <= '1' when rs1(instr_word_IE) /= 0;
             rs2_valid           <= '1' when rs2(instr_word_IE) /= 0;
             rd_read_only_valid  <= '1' when rd(instr_word_IE)  /= 0;
             tracer_result <= RS1_Data_IE;
           end if;
 
-          if decoded_instruction_LS(HVMEMSTR_bit_position) = '1' then
+          if decoded_instruction_LS(KMEMSTR_bit_position) = '1' then
             rs1_valid           <= '1' when rs1(instr_word_IE) /= 0;
             rs2_valid           <= '1' when rs2(instr_word_IE) /= 0;
             rd_read_only_valid  <= '1' when rd(instr_word_IE)  /= 0;
@@ -2565,73 +2569,83 @@ begin
     end if;
 
     for h in accl_range loop
-    if hdc_instr_req(h) = '1' then  
+    if dsp_instr_req(h) = '1' then  
       DSP_instr <= '1';
-      case state_HDC(h) is
-        when hdc_init =>
-          if    decoded_instruction(HVBUNDLE_bit_position)    = '1' then
+      case state_DSP(h) is
+        when dsp_init =>
+          if accl_sel = ACCL_SEL_DSP then
+            if    decoded_instruction_DSP(KADDV_bit_position)    = '1' then
+              rs1_valid           <= '1' when rs1(instr_word_IE) /= 0;
+              rs2_valid           <= '1' when rs2(instr_word_IE) /= 0;
+              rd_read_only_valid  <= '1' when rd(instr_word_IE)  /= 0;
+            elsif decoded_instruction_DSP(KSVADDSC_bit_position) = '1' then
+              rs1_valid           <= '1' when rs1(instr_word_IE) /= 0;
+              rs2_valid           <= '1' when rs2(instr_word_IE) /= 0;
+              rd_read_only_valid  <= '1' when rd(instr_word_IE)  /= 0;
+            elsif decoded_instruction_DSP(KSVADDRF_bit_position) = '1' then
+              rs1_valid           <= '1' when rs1(instr_word_IE) /= 0;
+              rs2_valid           <= '1' when rs2(instr_word_IE) /= 0;
+              rd_read_only_valid  <= '1' when rd(instr_word_IE)  /= 0;
+            elsif decoded_instruction_DSP(KSUBV_bit_position)    = '1' then
+              rs1_valid           <= '1' when rs1(instr_word_IE) /= 0;
+              rs2_valid           <= '1' when rs2(instr_word_IE) /= 0;
+              rd_read_only_valid  <= '1' when rd(instr_word_IE)  /= 0;
+            elsif decoded_instruction_DSP(KVMUL_bit_position)    = '1' then
+              rs1_valid           <= '1' when rs1(instr_word_IE) /= 0;
+              rs2_valid           <= '1' when rs2(instr_word_IE) /= 0;
+              rd_read_only_valid  <= '1' when rd(instr_word_IE)  /= 0;
+            elsif decoded_instruction_DSP(KSVMULSC_bit_position) = '1' then
+              rs1_valid           <= '1' when rs1(instr_word_IE) /= 0;
+              rs2_valid           <= '1' when rs2(instr_word_IE) /= 0;
+              rd_read_only_valid  <= '1' when rd(instr_word_IE)  /= 0;
+            elsif decoded_instruction_DSP(KSVMULRF_bit_position) = '1' then
+              rs1_valid           <= '1' when rs1(instr_word_IE) /= 0;
+              rs2_valid           <= '1' when rs2(instr_word_IE) /= 0;
+              rd_read_only_valid  <= '1' when rd(instr_word_IE)  /= 0;
+            elsif decoded_instruction_DSP(KSRAV_bit_position)    = '1' then
+              rs1_valid           <= '1' when rs1(instr_word_IE) /= 0;
+              rs2_valid           <= '1' when rs2(instr_word_IE) /= 0;
+              rd_read_only_valid  <= '1' when rd(instr_word_IE)  /= 0;
+            elsif decoded_instruction_DSP(KSRLV_bit_position)    = '1' then
+              rs1_valid           <= '1' when rs1(instr_word_IE) /= 0;
+              rs2_valid           <= '1' when rs2(instr_word_IE) /= 0;
+              rd_read_only_valid  <= '1' when rd(instr_word_IE)  /= 0;
+            elsif decoded_instruction_DSP(KVRED_bit_position)    = '1' then
+              rs1_valid           <= '1' when rs1(instr_word_IE) /= 0;
+              rd_read_only_valid  <= '1' when rd(instr_word_IE)  /= 0;
+            elsif decoded_instruction_DSP(KVSLT_bit_position)    = '1' then
+              rs1_valid           <= '1' when rs1(instr_word_IE) /= 0;
+              rs2_valid           <= '1' when rs2(instr_word_IE) /= 0;
+              rd_read_only_valid  <= '1' when rd(instr_word_IE)  /= 0;
+            elsif decoded_instruction_DSP(KSVSLT_bit_position)   = '1' then
+              rs1_valid           <= '1' when rs1(instr_word_IE) /= 0;
+              rs2_valid           <= '1' when rs2(instr_word_IE) /= 0;
+              rd_read_only_valid  <= '1' when rd(instr_word_IE)  /= 0;
+            elsif decoded_instruction_DSP(KRELU_bit_position)    = '1' then
+              rs1_valid           <= '1' when rs1(instr_word_IE) /= 0;
+              rd_read_only_valid  <= '1' when rd(instr_word_IE)  /= 0;
+            elsif decoded_instruction_DSP(KDOTP_bit_position)    = '1' then
+              rs1_valid           <= '1' when rs1(instr_word_IE) /= 0;
+              rs2_valid           <= '1' when rs2(instr_word_IE) /= 0;
+              rd_read_only_valid  <= '1' when rd(instr_word_IE)  /= 0;
+            elsif decoded_instruction_DSP(KDOTPPS_bit_position)  = '1' then
+              rs1_valid           <= '1' when rs1(instr_word_IE) /= 0;
+              rs2_valid           <= '1' when rs2(instr_word_IE) /= 0;
+              rd_read_only_valid  <= '1' when rd(instr_word_IE)  /= 0;
+            elsif decoded_instruction_DSP(KBCAST_bit_position)   = '1' then
+              rs1_valid           <= '1' when rs1(instr_word_IE) /= 0;
+              rd_read_only_valid  <= '1' when rd(instr_word_IE)  /= 0;
+            elsif decoded_instruction_DSP(KVCP_bit_position)     = '1' then
+              rs1_valid           <= '1' when rs1(instr_word_IE) /= 0;
+              rd_read_only_valid  <= '1' when rd(instr_word_IE)  /= 0;
+            end if;
+          elsif decoded_instruction_DSP(HVBUNDLE_bit_position) = '1' or
+                decoded_instruction_DSP(HVBIND_bit_position)   = '1' or
+                decoded_instruction_DSP(HVSIM_bit_position)    = '1' or
+                decoded_instruction_DSP(HVCLIP_bit_position)   = '1' or
+                decoded_instruction_DSP(HVENC_bit_position)    = '1' then
             rs1_valid           <= '1' when rs1(instr_word_IE) /= 0;
             rs2_valid           <= '1' when rs2(instr_word_IE) /= 0;
-            rd_read_only_valid  <= '1' when rd(instr_word_IE)  /= 0;
-          elsif decoded_instruction(HVBIND_bit_position) = '1' then
-            rs1_valid           <= '1' when rs1(instr_word_IE) /= 0;
-            rs2_valid           <= '1' when rs2(instr_word_IE) /= 0;
-            rd_read_only_valid  <= '1' when rd(instr_word_IE)  /= 0;
-          elsif decoded_instruction(HVSIM_bit_position) = '1' then
-            rs1_valid           <= '1' when rs1(instr_word_IE) /= 0;
-            rs2_valid           <= '1' when rs2(instr_word_IE) /= 0;
-            rd_read_only_valid  <= '1' when rd(instr_word_IE)  /= 0;
-          elsif decoded_instruction(HVCLIP_bit_position)    = '1' then
-            rs1_valid           <= '1' when rs1(instr_word_IE) /= 0;
-            rs2_valid           <= '1' when rs2(instr_word_IE) /= 0;
-            rd_read_only_valid  <= '1' when rd(instr_word_IE)  /= 0;
-          elsif decoded_instruction(HVPERM_bit_position)    = '1' then
-            rs1_valid           <= '1' when rs1(instr_word_IE) /= 0;
-            rs2_valid           <= '1' when rs2(instr_word_IE) /= 0;
-            rd_read_only_valid  <= '1' when rd(instr_word_IE)  /= 0;
-          elsif decoded_instruction(KSVADDSC_bit_position) = '1' then
-            rs1_valid           <= '1' when rs1(instr_word_IE) /= 0;
-            rs2_valid           <= '1' when rs2(instr_word_IE) /= 0;
-            rd_read_only_valid  <= '1' when rd(instr_word_IE)  /= 0;
-          elsif decoded_instruction(KSVMULSC_bit_position) = '1' then
-            rs1_valid           <= '1' when rs1(instr_word_IE) /= 0;
-            rs2_valid           <= '1' when rs2(instr_word_IE) /= 0;
-            rd_read_only_valid  <= '1' when rd(instr_word_IE)  /= 0;
-          elsif decoded_instruction(KSRAV_bit_position)    = '1' then
-            rs1_valid           <= '1' when rs1(instr_word_IE) /= 0;
-            rs2_valid           <= '1' when rs2(instr_word_IE) /= 0;
-            rd_read_only_valid  <= '1' when rd(instr_word_IE)  /= 0;
-          elsif decoded_instruction(KSRLV_bit_position)    = '1' then
-            rs1_valid           <= '1' when rs1(instr_word_IE) /= 0;
-            rs2_valid           <= '1' when rs2(instr_word_IE) /= 0;
-            rd_read_only_valid  <= '1' when rd(instr_word_IE)  /= 0;
-          elsif decoded_instruction(KVRED_bit_position)    = '1' then
-            rs1_valid           <= '1' when rs1(instr_word_IE) /= 0;
-            rd_read_only_valid  <= '1' when rd(instr_word_IE)  /= 0;
-          elsif decoded_instruction(KVSLT_bit_position)    = '1' then
-            rs1_valid           <= '1' when rs1(instr_word_IE) /= 0;
-            rs2_valid           <= '1' when rs2(instr_word_IE) /= 0;
-            rd_read_only_valid  <= '1' when rd(instr_word_IE)  /= 0;
-          elsif decoded_instruction(KSVSLT_bit_position)   = '1' then
-            rs1_valid           <= '1' when rs1(instr_word_IE) /= 0;
-            rs2_valid           <= '1' when rs2(instr_word_IE) /= 0;
-            rd_read_only_valid  <= '1' when rd(instr_word_IE)  /= 0;
-          elsif decoded_instruction(KRELU_bit_position)    = '1' then
-            rs1_valid           <= '1' when rs1(instr_word_IE) /= 0;
-            rd_read_only_valid  <= '1' when rd(instr_word_IE)  /= 0;
-          elsif decoded_instruction(HVSEARCH_bit_position)    = '1' then
-            rs1_valid           <= '1' when rs1(instr_word_IE) /= 0;
-            rs2_valid           <= '1' when rs2(instr_word_IE) /= 0;
-            rd_read_only_valid  <= '1' when rd(instr_word_IE)  /= 0;
-          elsif decoded_instruction(KDOTPPS_bit_position)  = '1' then
-            rs1_valid           <= '1' when rs1(instr_word_IE) /= 0;
-            rs2_valid           <= '1' when rs2(instr_word_IE) /= 0;
-            rd_read_only_valid  <= '1' when rd(instr_word_IE)  /= 0;
-          elsif decoded_instruction(KBCAST_bit_position)   = '1' then
-            rs1_valid           <= '1' when rs1(instr_word_IE) /= 0;
-            rd_read_only_valid  <= '1' when rd(instr_word_IE)  /= 0;
-          elsif decoded_instruction(KVCP_bit_position)     = '1' then
-            rs1_valid           <= '1' when rs1(instr_word_IE) /= 0;
             rd_read_only_valid  <= '1' when rd(instr_word_IE)  /= 0;
           end if;
         when others =>

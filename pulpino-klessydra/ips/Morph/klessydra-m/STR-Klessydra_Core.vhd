@@ -59,19 +59,19 @@ entity klessydra_m_core is
     btb_len                 : natural := 6;   -- Indicates the number of entries in the btb which is 2^btb_len
     superscalar_exec_en     : natural := 1;   -- Enables superscalar execution when set to 1, else the stall of the pipeline will depend on tha latency of the instruction
     accl_en                 : natural := 1;   -- Enables the generation of the general purpose accelerator
+    accl_sel                : natural := ACCL_SEL_DSP; -- Selects the accelerator instantiated in the shared VCU
     replicate_accl_en       : natural := 0;   -- Set to 1 to replicate the accelerator for every thread
     multithreaded_accl_en   : natural := 0;   -- Set to 1 to let the replicated accelerator share the functional units (note: replicate_accl_en must be set to '1')
     SPM_NUM                 : natural := 3;   -- The number of scratchpads available "Minimum allowed is two"
     Addr_Width              : natural := 13;  -- This address is for scratchpads. Setting this will make the size of the spm to be: "2^Addr_Width -1"
     SPM_STRT_ADDR           : std_logic_vector(31 downto 0) := x"1000_0000";  -- This is starting address of the spms, it shouldn't overlap any sections in the memory map
-    SIMD                    : natural := 8;   -- Changing the SIMD, would change the number of the functional units in the hdc, and the number of banks in the spms (can be power of 2 only e.g. 1,2,4,8)
+    SIMD                    : natural := 8;   -- Changing the SIMD, would change the number of the functional units in the dsp, and the number of banks in the spms (can be power of 2 only e.g. 1,2,4,8)
     MCYCLE_EN               : natural := 0;   -- Can be set to 1 or 0 only. Setting to zero will disable MCYCLE and MCYCLEH
     MINSTRET_EN             : natural := 0;   -- Can be set to 1 or 0 only. Setting to zero will disable MINSTRET and MINSTRETH
     MHPMCOUNTER_EN          : natural := 0;   -- Can be set to 1 or 0 only. Setting to zero will disable all performance counters except "MCYCLE/H" and "MINSTRET/H"
     count_all               : natural := 1;   -- Perfomance counters count for all the harts instead of there own hart
     debug_en                : natural := 0;   -- Generates the debug unit
     tracer_en               : natural := 0;   -- Enables the generation of the instruction tracer disable in extremely long simulations in order to save storage space
-    HDCU_PERF_EN            : natural := 1;
     ----------------------------------------------------------------------------------------
     Data_Width              : natural;
     SPM_ADDR_WID            : natural;
@@ -141,26 +141,24 @@ entity klessydra_m_core is
     sw_irq_served_o         : out std_logic_vector(THREAD_POOL_SIZE_GLOBAL-1 downto 0);
     -- VCU Signals
     harc_EXEC               : out natural range THREAD_POOL_SIZE-1 downto 0;
-    HVSIZE                  : out array_2d(THREAD_POOL_SIZE-1 downto 0)(Addr_Width downto 0);
+    MVSIZE                  : out array_2d(THREAD_POOL_SIZE-1 downto 0)(Addr_Width downto 0);
     MVTYPE                  : out array_2d(THREAD_POOL_SIZE-1 downto 0)(3 downto 0);
     MPSCLFAC                : out array_2d(THREAD_POOL_SIZE-1 downto 0)(4 downto 0);
     pc_IE                   : out std_logic_vector(31 downto 0);
     rs1_to_sc               : out std_logic_vector(SPM_ADDR_WID-1 downto 0);
     rs2_to_sc               : out std_logic_vector(SPM_ADDR_WID-1 downto 0);
     rd_to_sc                : out std_logic_vector(SPM_ADDR_WID-1 downto 0);
-    decoded_instruction     : out std_logic_vector(HDC_UNIT_INSTR_SET_SIZE-1 downto 0);
-    decoded_instruction_FHRR: out std_logic_vector(FHRR_UNIT_INSTR_SET_SIZE-1 downto 0);
-    decoded_instruction_MCR : out std_logic_vector(MCR_UNIT_INSTR_SET_SIZE-1 downto 0);
+    decoded_instruction_DSP : out std_logic_vector(DSP_UNIT_INSTR_SET_SIZE-1 downto 0);
     RS1_Data_IE             : out std_logic_vector(31 downto 0);
     RS2_Data_IE             : out std_logic_vector(31 downto 0);
     RD_Data_IE              : out std_logic_vector(31 downto 0);  -- unused
-    hdc_instr_req           : out std_logic_vector(ACCL_NUM-1 downto 0);
+    dsp_instr_req           : out std_logic_vector(ACCL_NUM-1 downto 0);
     spm_rs1                 : out std_logic;
     spm_rs2                 : out std_logic;
     vec_read_rs1_ID         : out std_logic;
     vec_read_rs2_ID         : out std_logic;
     vec_write_rd_ID         : out std_logic;
-    busy_HDC                : in  std_logic_vector(ACCL_NUM-1 downto 0);
+    busy_DSP                : in  std_logic_vector(ACCL_NUM-1 downto 0);
     state_LS                : out fsm_LS_states;
     sc_word_count_wire      : out integer;
     spm_bcast               : out std_logic;
@@ -175,19 +173,15 @@ entity klessydra_m_core is
     ls_sc_data_read_wire    : in  std_logic_vector(Data_Width-1 downto 0);
     ls_sci_wr_gnt           : in  std_logic;
     ls_data_gnt_i           : in  std_logic_vector(SPM_NUM-1 downto 0);
-    hdc_taken_branch_BSC    : in  std_logic_vector(ACCL_NUM-1 downto 0);
-    hdc_taken_branch_MCR    : in  std_logic_vector(ACCL_NUM-1 downto 0);
-    hdc_taken_branch_FHRR   : in  std_logic_vector(ACCL_NUM-1 downto 0);
-    hdc_taken_branch_DSP    : in  std_logic_vector(ACCL_NUM-1 downto 0);
-    hdc_except_condition    : in  std_logic_vector(ACCL_NUM-1 downto 0);
-    -- HDCU Performance counter signals
-    hdcu_performance_counter   : in array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0); 
-    hdcu_bind_perf_counter     : in array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0);
-    hdcu_bundle_perf_counter   : in array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0);
-    hdcu_clip_perf_counter     : in array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0);
-    hdcu_sim_perf_counter      : in array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0);
-    hdcu_perm_perf_counter     : in array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0);
-    hdcu_search_perf_counter   : in array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0)
+    dsp_taken_branch        : in  std_logic_vector(ACCL_NUM-1 downto 0);
+    dsp_except_condition    : in  std_logic_vector(ACCL_NUM-1 downto 0);
+    hdcu_performance_counter : in array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0);
+    hdcu_bind_perf_counter   : in array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0);
+    hdcu_bundle_perf_counter : in array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0);
+    hdcu_clip_perf_counter   : in array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0);
+    hdcu_sim_perf_counter    : in array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0);
+    hdcu_perm_perf_counter   : in array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0);
+    hdcu_enc_perf_counter    : in array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0)
     );
 
 end entity klessydra_m_core;
@@ -249,7 +243,7 @@ architecture Klessydra_M of klessydra_m_core is
   -- pc updater signals
   signal served_ie_except_condition      : std_logic_vector(harc_range);
   signal served_ls_except_condition      : std_logic_vector(harc_range);
-  signal served_hdc_except_condition     : std_logic_vector(harc_range);
+  signal served_dsp_except_condition     : std_logic_vector(harc_range);
   signal served_except_condition         : std_logic_vector(harc_range);
   signal served_mret_condition           : std_logic_vector(harc_range);
   signal served_irq                      : std_logic_vector(harc_range);
@@ -257,7 +251,7 @@ architecture Klessydra_M of klessydra_m_core is
   signal taken_branch_pending            : std_logic_vector(harc_range);
   signal ie_except_data                  : std_logic_vector(31 downto 0);
   signal ls_except_data                  : std_logic_vector(31 downto 0);
-  signal hdc_except_data                 : array_2d(accl_range)(31 downto 0);
+  signal dsp_except_data                 : array_2d(accl_range)(31 downto 0);
   signal taken_branch                    : std_logic;
   signal ie_taken_branch                 : std_logic;
   signal ls_taken_branch                 : std_logic;
@@ -381,14 +375,11 @@ architecture Klessydra_M of klessydra_m_core is
     taken_branch                      : in  std_logic;
     ie_taken_branch                   : in  std_logic;
     ls_taken_branch                   : in  std_logic;
-    hdc_taken_branch_BSC              : in  std_logic_vector(ACCL_NUM-1 downto 0);
-    hdc_taken_branch_MCR              : in  std_logic_vector(ACCL_NUM-1 downto 0);
-    hdc_taken_branch_FHRR             : in  std_logic_vector(ACCL_NUM-1 downto 0);
-    hdc_taken_branch_DSP              : in  std_logic_vector(ACCL_NUM-1 downto 0);
+    dsp_taken_branch                  : in  std_logic_vector(accl_range);
     set_branch_condition              : in  std_logic;
     ie_except_condition               : in  std_logic;
     ls_except_condition               : in  std_logic;
-    hdc_except_condition              : in  std_logic_vector(accl_range);
+    dsp_except_condition              : in  std_logic_vector(accl_range);
     set_except_condition              : in  std_logic;
     set_mret_condition                : in  std_logic;
     set_wfi_condition                 : in  std_logic;
@@ -405,7 +396,7 @@ architecture Klessydra_M of klessydra_m_core is
     harc_IF                           : out harc_range;
     served_ie_except_condition        : out std_logic_vector(harc_range);
     served_ls_except_condition        : out std_logic_vector(harc_range);
-    served_hdc_except_condition       : out std_logic_vector(harc_range);
+    served_dsp_except_condition       : out std_logic_vector(harc_range);
     served_except_condition           : out std_logic_vector(harc_range);
     served_mret_condition             : out std_logic_vector(harc_range);
     served_irq                        : in  std_logic_vector(harc_range);
@@ -452,17 +443,16 @@ architecture Klessydra_M of klessydra_m_core is
     MHPMCOUNTER_EN              : natural;
     RF_CEIL                     : natural;
     TPS_GLBL_CEIL               : natural;
-    count_all                   : natural;
-    HDCU_PERF_EN                : natural
+    count_all                   : natural
   );
   port (
     pc_IE                       : in  std_logic_vector(31 downto 0);
     ie_except_data              : in  std_logic_vector(31 downto 0);
     ls_except_data              : in  std_logic_vector(31 downto 0);
-    hdc_except_data             : in  array_2d(accl_range)(31 downto 0);
+    dsp_except_data             : in  array_2d(accl_range)(31 downto 0);
     served_ie_except_condition  : in  std_logic_vector(harc_range);
     served_ls_except_condition  : in  std_logic_vector(harc_range);
-    served_hdc_except_condition : in  std_logic_vector(harc_range);
+    served_dsp_except_condition : in  std_logic_vector(harc_range);
     harc_sleep                  : in  std_logic_vector(harc_range);
     harc_EXEC                   : in  natural range THREAD_POOL_SIZE-1 downto 0;
     harc_to_csr                 : in  natural range THREAD_POOL_SIZE_GLOBAL-1 downto 0;
@@ -474,7 +464,7 @@ architecture Klessydra_M of klessydra_m_core is
     pc_except_value_wire        : in  array_2d(harc_range)(31 downto 0);
     data_addr_internal          : in  std_logic_vector(31 downto 0);
     jump_instr                  : in  std_logic;
-    branch_instr                : in  std_logic;    
+    branch_instr                : in  std_logic;
     branch_hit                  : in  std_logic;
     set_branch_condition        : in  std_logic;
     csr_instr_req               : in  std_logic;
@@ -486,7 +476,7 @@ architecture Klessydra_M of klessydra_m_core is
     csr_instr_done              : out std_logic;
     csr_access_denied_o         : out std_logic;
     csr_rdata_o                 : out std_logic_vector (31 downto 0);
-    HVSIZE                      : out array_2d(harc_range)(Addr_Width downto 0);
+    MVSIZE                      : out array_2d(harc_range)(Addr_Width downto 0);
     MVTYPE                      : out array_2d(harc_range)(3 downto 0);
     MPSCLFAC                    : out array_2d(harc_range)(4 downto 0);
     MHARTID                     : out array_2d(harc_range)(9 downto 0);
@@ -516,14 +506,13 @@ architecture Klessydra_M of klessydra_m_core is
     sw_irq_i                    : in  std_logic_vector(THREAD_POOL_SIZE_GLOBAL-1 downto 0);
     sw_irq_pending              : in  std_logic_vector(THREAD_POOL_SIZE_GLOBAL-1 downto 0);
     source_hartid_i             : in  natural range THREAD_POOL_SIZE_GLOBAL-1 downto 0;
-    hdcu_performance_counter    : in array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0); 
-    hdcu_bind_perf_counter      : in array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0);
-    hdcu_bundle_perf_counter    : in array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0);
-    hdcu_clip_perf_counter      : in array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0);
-    hdcu_sim_perf_counter       : in array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0);
-    hdcu_perm_perf_counter      : in array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0);
-    hdcu_search_perf_counter    : in array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0);
-    busy_hdc                    : in std_logic_vector(accl_range)
+    hdcu_performance_counter    : in  array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0);
+    hdcu_bind_perf_counter      : in  array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0);
+    hdcu_bundle_perf_counter    : in  array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0);
+    hdcu_clip_perf_counter      : in  array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0);
+    hdcu_sim_perf_counter       : in  array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0);
+    hdcu_perm_perf_counter      : in  array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0);
+    hdcu_enc_perf_counter       : in  array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0)
     );
   end component;
 
@@ -545,6 +534,7 @@ architecture Klessydra_M of klessydra_m_core is
     btb_len                    : natural;
     superscalar_exec_en        : natural;
     accl_en                    : natural;
+    accl_sel                   : natural;
     replicate_accl_en          : natural;
     multithreaded_accl_en      : natural;
     SPM_NUM                    : natural;  
@@ -577,7 +567,7 @@ architecture Klessydra_M of klessydra_m_core is
     csr_instr_done             : in  std_logic;
     csr_access_denied_o        : in  std_logic;
     csr_rdata_o                : in  std_logic_vector (31 downto 0);
-    HVSIZE                     : in  array_2d(harc_range)(Addr_Width downto 0);
+    MVSIZE                     : in  array_2d(harc_range)(Addr_Width downto 0);
     MVTYPE                     : in  array_2d(harc_range)(3 downto 0);
     MPSCLFAC                   : in  array_2d(harc_range)(4 downto 0);
     MHARTID                    : in  array_2d(harc_range)(9  downto 0);
@@ -594,19 +584,16 @@ architecture Klessydra_M of klessydra_m_core is
     pc_IE                      : out std_logic_vector(31 downto 0);
     ie_except_data             : out std_logic_vector(31 downto 0);
     ls_except_data             : out std_logic_vector(31 downto 0);
-    hdc_except_data            : out array_2d(accl_range)(31 downto 0);
+    dsp_except_data            : out array_2d(accl_range)(31 downto 0);
     taken_branch               : out std_logic;
     ie_taken_branch            : out std_logic;
     ls_taken_branch            : out std_logic;
-    hdc_taken_branch_BSC       : in  std_logic_vector(ACCL_NUM-1 downto 0);
-    hdc_taken_branch_MCR       : in  std_logic_vector(ACCL_NUM-1 downto 0);
-    hdc_taken_branch_FHRR      : in  std_logic_vector(ACCL_NUM-1 downto 0);
-    hdc_taken_branch_DSP       : in  std_logic_vector(ACCL_NUM-1 downto 0);    
+    dsp_taken_branch           : in  std_logic_vector(accl_range);
     set_branch_condition       : out std_logic;
     set_except_condition       : out std_logic;        
     ie_except_condition        : out std_logic;
     ls_except_condition        : out std_logic;
-    hdc_except_condition       : in  std_logic_vector(accl_range);
+    dsp_except_condition       : in  std_logic_vector(accl_range);
     set_mret_condition         : out std_logic;
     set_wfi_condition          : out std_logic;
     csr_instr_req              : out std_logic;
@@ -679,19 +666,17 @@ architecture Klessydra_M of klessydra_m_core is
     rs1_to_sc                  : out std_logic_vector(SPM_ADDR_WID-1 downto 0);
     rs2_to_sc                  : out std_logic_vector(SPM_ADDR_WID-1 downto 0);
     rd_to_sc                   : out std_logic_vector(SPM_ADDR_WID-1 downto 0);
-    decoded_instruction        : out std_logic_vector(HDC_UNIT_INSTR_SET_SIZE-1 downto 0);
-    decoded_instruction_FHRR   : out std_logic_vector(FHRR_UNIT_INSTR_SET_SIZE-1 downto 0);
-    decoded_instruction_MCR    : out std_logic_vector(MCR_UNIT_INSTR_SET_SIZE-1 downto 0);
+    decoded_instruction_DSP    : out std_logic_vector(DSP_UNIT_INSTR_SET_SIZE-1 downto 0);
     RS1_Data_IE                : out std_logic_vector(31 downto 0);
     RS2_Data_IE                : out std_logic_vector(31 downto 0);
     RD_Data_IE                 : out std_logic_vector(31 downto 0);  -- unused
-    hdc_instr_req              : out std_logic_vector(ACCL_NUM-1 downto 0);
+    dsp_instr_req              : out std_logic_vector(ACCL_NUM-1 downto 0);
     spm_rs1                    : out std_logic;
     spm_rs2                    : out std_logic;
     vec_read_rs1_ID            : out std_logic;
     vec_read_rs2_ID            : out std_logic;
     vec_write_rd_ID            : out std_logic;
-    busy_HDC                   : in  std_logic_vector(ACCL_NUM-1 downto 0);
+    busy_DSP                   : in  std_logic_vector(ACCL_NUM-1 downto 0);
     state_LS                   : out fsm_LS_states;
     sc_word_count_wire         : out integer;
     spm_bcast                  : out std_logic;
@@ -707,7 +692,6 @@ architecture Klessydra_M of klessydra_m_core is
     ls_sci_wr_gnt              : in  std_logic;
     ls_data_gnt_i              : in  std_logic_vector(SPM_NUM-1 downto 0)
   );
-  
   end component;
 
 --------------------------------------------------------------------------------------------------
@@ -840,14 +824,11 @@ begin
       taken_branch                => taken_branch,
       ie_taken_branch             => ie_taken_branch,
       ls_taken_branch             => ls_taken_branch,
-      hdc_taken_branch_BSC        => hdc_taken_branch_BSC,
-      hdc_taken_branch_MCR        => hdc_taken_branch_MCR,
-      hdc_taken_branch_FHRR       => hdc_taken_branch_FHRR,
-      hdc_taken_branch_DSP        => hdc_taken_branch_DSP,
+      dsp_taken_branch            => dsp_taken_branch,
       set_branch_condition        => set_branch_condition,
       ie_except_condition         => ie_except_condition,
       ls_except_condition         => ls_except_condition,
-      hdc_except_condition        => hdc_except_condition, 
+      dsp_except_condition        => dsp_except_condition, 
       set_except_condition        => set_except_condition,
       set_mret_condition          => set_mret_condition,
       set_wfi_condition           => set_wfi_condition,
@@ -867,7 +848,7 @@ begin
       harc_IF                     => harc_IF,
       served_ie_except_condition  => served_ie_except_condition,
       served_ls_except_condition  => served_ls_except_condition,
-      served_hdc_except_condition => served_hdc_except_condition,
+      served_dsp_except_condition => served_dsp_except_condition,
       served_except_condition     => served_except_condition,
       served_mret_condition       => served_mret_condition,
       served_irq                  => served_irq,
@@ -913,17 +894,16 @@ begin
       MHPMCOUNTER_EN              => MHPMCOUNTER_EN,
       RF_CEIL                     => RF_CEIL,
       TPS_GLBL_CEIL               => TPS_GLBL_CEIL,
-      count_all                   => count_all,
-      HDCU_PERF_EN                => HDCU_PERF_EN
+      count_all                   => count_all
     )
     port map(
       pc_IE                       => pc_IE,
       ie_except_data              => ie_except_data,
       ls_except_data              => ls_except_data,
-      hdc_except_data             => hdc_except_data,
+      dsp_except_data             => dsp_except_data,
       served_ie_except_condition  => served_ie_except_condition,
       served_ls_except_condition  => served_ls_except_condition,
-      served_hdc_except_condition => served_hdc_except_condition,
+      served_dsp_except_condition => served_dsp_except_condition,
       harc_sleep                  => harc_sleep,
       harc_EXEC                   => harc_EXEC,
       harc_to_csr                 => harc_to_csr,
@@ -947,7 +927,7 @@ begin
       csr_instr_done              => csr_instr_done,
       csr_access_denied_o         => csr_access_denied_o,
       csr_rdata_o                 => csr_rdata_o,
-      HVSIZE                      => HVSIZE,
+      MVSIZE                      => MVSIZE,
       MVTYPE                      => MVTYPE,
       MPSCLFAC                    => MPSCLFAC,
       MHARTID                     => MHARTID,
@@ -980,11 +960,10 @@ begin
       hdcu_performance_counter    => hdcu_performance_counter,
       hdcu_bind_perf_counter      => hdcu_bind_perf_counter,
       hdcu_bundle_perf_counter    => hdcu_bundle_perf_counter,
-      hdcu_sim_perf_counter       => hdcu_sim_perf_counter,
       hdcu_clip_perf_counter      => hdcu_clip_perf_counter,
+      hdcu_sim_perf_counter       => hdcu_sim_perf_counter,
       hdcu_perm_perf_counter      => hdcu_perm_perf_counter,
-      hdcu_search_perf_counter    => hdcu_search_perf_counter,
-      busy_hdc                    => busy_hdc
+      hdcu_enc_perf_counter       => hdcu_enc_perf_counter
       );
 
   Pipe : Pipeline
@@ -1005,6 +984,7 @@ begin
       btb_len                 => btb_len,
       superscalar_exec_en     => superscalar_exec_en,
       accl_en                 => accl_en,
+      accl_sel                => accl_sel,
       replicate_accl_en       => replicate_accl_en,
       multithreaded_accl_en   => multithreaded_accl_en,
       SPM_NUM                 => SPM_NUM,  
@@ -1041,8 +1021,8 @@ begin
       pc_IE                      => pc_IE,
       ie_except_data             => ie_except_data,
       ls_except_data             => ls_except_data,
-      hdc_except_data            => hdc_except_data,
-      HVSIZE                     => HVSIZE,
+      dsp_except_data            => dsp_except_data,
+      MVSIZE                     => MVSIZE,
       MVTYPE                     => MVTYPE,
       MPSCLFAC                   => MPSCLFAC,
       MHARTID                    => MHARTID,
@@ -1058,15 +1038,12 @@ begin
       taken_branch               => taken_branch,
       ie_taken_branch            => ie_taken_branch,
       ls_taken_branch            => ls_taken_branch,
-      hdc_taken_branch_BSC        => hdc_taken_branch_BSC,
-      hdc_taken_branch_MCR        => hdc_taken_branch_MCR,
-      hdc_taken_branch_FHRR       => hdc_taken_branch_FHRR,
-      hdc_taken_branch_DSP        => hdc_taken_branch_DSP,      
+      dsp_taken_branch           => dsp_taken_branch,
       set_branch_condition       => set_branch_condition,
       set_except_condition       => set_except_condition,
       ie_except_condition        => ie_except_condition,
       ls_except_condition        => ls_except_condition,
-      hdc_except_condition       => hdc_except_condition,
+      dsp_except_condition       => dsp_except_condition,
       set_mret_condition         => set_mret_condition,
       set_wfi_condition          => set_wfi_condition,
       csr_instr_req              => csr_instr_req,
@@ -1131,19 +1108,17 @@ begin
       rs1_to_sc                  => rs1_to_sc,
       rs2_to_sc                  => rs2_to_sc,
       rd_to_sc                   => rd_to_sc,
-      decoded_instruction    => decoded_instruction,
-      decoded_instruction_FHRR   => decoded_instruction_FHRR,  -- BUG5 fix [20260728]: was unmapped -> FHRR unit input undriven -> HDCU handshake hang
-      decoded_instruction_MCR    => decoded_instruction_MCR,   -- BUG5 fix [20260728]
+      decoded_instruction_DSP    => decoded_instruction_DSP,
       RS1_Data_IE                => RS1_Data_IE,
       RS2_Data_IE                => RS2_Data_IE,
       RD_Data_IE                 => RD_Data_IE,
-      hdc_instr_req              => hdc_instr_req,
+      dsp_instr_req              => dsp_instr_req,
       spm_rs1                    => spm_rs1,
       spm_rs2                    => spm_rs2,
       vec_read_rs1_ID            => vec_read_rs1_ID,
       vec_read_rs2_ID            => vec_read_rs2_ID,
       vec_write_rd_ID            => vec_write_rd_ID,
-      busy_HDC                   => busy_HDC,
+      busy_DSP                   => busy_DSP,
       state_LS                   => state_LS,
       sc_word_count_wire         => sc_word_count_wire,
       spm_bcast                  => spm_bcast,

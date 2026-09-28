@@ -17,6 +17,7 @@ use std.textio.all;
 
 -- local packages ------------
 use work.riscv_klessydra.all;
+--use work.klessydra_parameters.all;
 
 -- pipeline  pinout --------------------
 entity IF_STAGE is
@@ -96,6 +97,9 @@ architecture FETCH of IF_STAGE is
   signal instr_rvalid_FETCH      : std_logic;
   signal instr_rvalid_ID_int     : std_logic;
   signal busy_FETCH              : std_logic;
+  signal harc_FETCH_sync         : harc_range;
+  signal harc_ID_comb            : harc_range;
+  signal harc_ID_sync            : harc_range;
 
   signal Immediate               : std_logic_vector(31 downto 0); -- AAA change this to variable as well in the ID_stage
 
@@ -122,6 +126,8 @@ architecture FETCH of IF_STAGE is
 
   signal branch_predict_taken_ID_wire : std_logic;
 
+
+  --constant btb_width             : integer(ceil(log2(real(btb_len))));
   signal btb         : array_2D((2**btb_len)-1 downto 0)(1 downto 0); -- CCC for compressed instructions we should do btb_len-2
 
   signal btb_addr_rd : natural;
@@ -160,6 +166,13 @@ architecture FETCH of IF_STAGE is
 ------------------------- ARCHITECTURE BEGIN -------------------------------------------------------
 begin
 
+  harc_FETCH <= 0 when fetch_stage_en = 0 else
+                harc_FETCH_sync when morph_en = 1 else
+                0;
+  harc_ID    <= harc_ID_comb when fetch_stage_en = 0 else
+                harc_ID_sync when morph_en = 1 else
+                0;
+
 ----------------------------------------------------------------------------------------------------
 -- stage IF -- (instruction fetch)
 ----------------------------------------------------------------------------------------------------
@@ -179,7 +192,7 @@ begin
       halt_update_FETCH <= (others => '0');
       if instr_gnt_i = '1' and block_input_inst_wire = '0' then
         pc_ID   <= pc_IF;
-        harc_ID <= harc_IF;
+        harc_ID_comb <= harc_IF;
       end if;
       if instr_rvalid_i = '1' and block_input_inst = '0' then 
         instr_word_ID_lat <= instr_rdata_i;
@@ -187,7 +200,6 @@ begin
     end if;
   end process;
 
-  harc_FETCH                 <=  0 ;
   branch_FETCH               <= '0';
   jump_FETCH                 <= '0';
   branch_predict_taken_ID    <= '0';
@@ -237,7 +249,7 @@ begin
   fetch_stage : process(clk_i, rst_ni)
   begin
     if rst_ni = '0' then
-      harc_FETCH             <= THREAD_POOL_SIZE-1;
+      harc_FETCH_sync        <= THREAD_POOL_SIZE-1;
       hart_sleep_count       <= (others => '0');
       CORE_STATE_FETCH       <= '1' & (0 to THREAD_POOL_BASELINE-1 => '0');
       instr_rvalid_FETCH_lat <= '0';
@@ -252,15 +264,15 @@ begin
       else
         instr_rvalid_ID_int <= '0';
         if instr_rvalid_FETCH           = '1' and   -- valid instruction
-           flush_hart_FETCH(harc_FETCH) = '0' and   -- no branch flush 
-           flush_fetch(harc_FETCH)      = '0' and   -- no ID stage flush
-           served_irq(harc_FETCH)       = '0' and   -- no IRQ served flush
+           flush_hart_FETCH(harc_FETCH_sync) = '0' and   -- no branch flush 
+           flush_fetch(harc_FETCH_sync)      = '0' and   -- no ID stage flush
+           served_irq(harc_FETCH_sync)       = '0' and   -- no IRQ served flush
            busy_ID                      = '0' and   -- no ID stage stall
            block_input_inst             = '0' then  -- no block of input from another core  
           instr_rvalid_ID_int    <= '1'; -- AAA change the name of instr_rvalid_ID_int as it conflicts with ano ther intrnal signal in the ID stage
           instr_word_ID_int      <= instr_word_FETCH;
           pc_ID                  <= pc_FETCH;
-          harc_ID                <= harc_FETCH;
+          harc_ID_sync           <= harc_FETCH_sync;
           instr_rvalid_FETCH_lat <= '0'; -- when we dispatched our instr, that means we don't need to latch
           CORE_STATE_FETCH       <= CORE_STATE;
         elsif busy_ID = '1' then  -- if we have a stall, then we latch the imput
@@ -273,10 +285,10 @@ begin
       if instr_gnt_i = '1' and block_input_inst_wire = '0' then
         if CORE_STATE(IMT_MODE) = '1' and instr_rvalid_FETCH = '0' then
           pc_ID      <= pc_IF;
-          harc_ID    <= harc_IF;
+          harc_ID_sync <= harc_IF;
         end if;
         pc_FETCH   <= pc_IF;
-        harc_FETCH <= harc_IF;
+        harc_FETCH_sync <= harc_IF;
       end if;
       if instr_rvalid_i = '1' and block_input_inst = '0' then
         instr_word_FETCH_lat <= instr_rdata_i;
@@ -312,10 +324,10 @@ begin
         rd_valid_ID_int       <= '0';
         rd_read_valid_ID_int  <= '0';
       end if;
-      if instr_rvalid_FETCH           = '1' and
-         flush_hart_FETCH(harc_FETCH) = '0' and 
-         flush_fetch(harc_FETCH)      = '0' and
-         served_irq(harc_FETCH)       = '0' and
+      if instr_rvalid_FETCH                = '1' and
+         flush_hart_FETCH(harc_FETCH_sync) = '0' and 
+         flush_fetch(harc_FETCH_sync)      = '0' and
+         served_irq(harc_FETCH_sync)       = '0' and
          busy_ID                      = '0' then
 
         rs1_valid_ID_int      <= '0';
@@ -372,12 +384,12 @@ begin
             rs2_valid_ID_int      <= '1';
             rd_valid_ID_int       <= '1';
 
-          when HVMEM =>
+          when KMEM =>
             rs1_valid_ID_int      <= '1';
             rs2_valid_ID_int      <= '1'; -- even when not valid rs2 is equal to "00000" which is register x0 that is always valid
             rd_read_valid_ID_int  <= '1';
 
-          when HDCU =>
+          when KDSP =>
             rs1_valid_ID_int      <= '1';
             rs2_valid_ID_int      <= '1';
             rd_read_valid_ID_int  <= '1';
@@ -400,7 +412,7 @@ begin
     FUNCT3_wires                 := FUNCT3(instr_word_FETCH);
     FUNCT12_wires                := FUNCT12(instr_word_FETCH);
     Immediate                    <= B_immediate(instr_word_FETCH); -- defualts to B_Immediate unless we have a JAL
-    jalr_addr_FETCH              <= return_address(harc_FETCH);  -- AAA componesate for return instructions that use an offset (although they should never be gerated by a gcc compiler)
+    jalr_addr_FETCH              <= return_address(harc_FETCH_sync);  -- AAA componesate for return instructions that use an offset (although they should never be gerated by a gcc compiler)
     branch_addr_FETCH            <= std_logic_vector(unsigned(pc_FETCH)+unsigned(B_immediate(instr_word_FETCH)));
     jump_addr_FETCH              <= std_logic_vector(unsigned(pc_FETCH)+unsigned(UJ_immediate(instr_word_FETCH)));
     jalr_FETCH                   <= '0';
@@ -415,13 +427,13 @@ begin
     if branch_instr = '1' or served_irq /= (harc_range => '0') then
       branch_stall <= '0';
     end if;
-    if absolute_jump(harc_FETCH) = '1' or served_irq /= (harc_range => '0') then
+    if absolute_jump(harc_FETCH_sync) = '1' or served_irq /= (harc_range => '0') then
        jalr_stall <= '0';
     end if;
     if instr_rvalid_FETCH           = '1' and 
-       --flush_hart_FETCH(harc_FETCH) = '0' and
-       flush_fetch(harc_FETCH)      = '0' and
-       --served_irq(harc_FETCH)                = '0' and
+       --flush_hart_FETCH(harc_FETCH_sync) = '0' and
+       flush_fetch(harc_FETCH_sync)      = '0' and
+       --served_irq(harc_FETCH_sync)                = '0' and
        --busy_ID                               = '0' and
        CORE_STATE(IMT_MODE) = '0' then
       case OPCODE_wires is
@@ -434,14 +446,14 @@ begin
         when JALR =>        -- JALR instruction
           jalr_FETCH <= '1';
           if CORE_STATE_FETCH(DUAL_HART_MODE) = '1' then
-            halt_update_FETCH_wire(harc_FETCH) <= '1';
+            halt_update_FETCH_wire(harc_FETCH_sync) <= '1';
           end if;
           --jalr_stall <= '1';
 
         when BRANCH =>      -- BRANCH instruction
           if branch_predict_en = 0 then
             if CORE_STATE_FETCH(DUAL_HART_MODE) = '1' then
-              halt_update_FETCH_wire(harc_FETCH) <= '1';
+              halt_update_FETCH_wire(harc_FETCH_sync) <= '1';
             end if;
             if branch_instr = '0' then
               branch_stall <= '1';
@@ -449,7 +461,7 @@ begin
           elsif btb_en = 1 then
             if btb(btb_addr_rd) > "01" then
               if CORE_STATE_FETCH(DUAL_HART_MODE) = '1' then
-                halt_update_FETCH_wire(harc_FETCH) <= '1';
+                halt_update_FETCH_wire(harc_FETCH_sync) <= '1';
               end if;
               branch_FETCH <= '1';
               branch_predict_taken_ID_wire <= '1';

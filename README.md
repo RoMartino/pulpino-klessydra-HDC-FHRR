@@ -4,19 +4,30 @@
 
 # Klessydra FHRR — Open-Source HDC Hardware Accelerator on RISC-V
 
-This repository is the **self-contained artifact** accompanying the paper:
+Artifact of the paper:
 
 > **A Configurable Open-Source FHRR Hardware Accelerator on a RISC-V Core
 > for Embedded Hyperdimensional Computing** — APCCAS 2026.
 
-It contains everything needed to build the custom RISC-V toolchain, simulate
-the Klessydra-Morph RISC-V core with the **FHRR (Fourier Holographic Reduced
-Representation) hyperdimensional-computing accelerator**, and reproduce the
-software/hardware HDC experiments reported in the paper.
+The repository contains the RTL of the Klessydra-Morph RISC-V core with the
+**FHRR-HDCU** accelerator (Fourier Holographic Reduced Representation), the
+C++ HDC library, the test suite, and the kit to build the RISC-V toolchain
+with the custom HDC instructions. It is self-contained: nothing else needs to
+be downloaded except the upstream toolchain sources, which the build script
+fetches for you.
 
-The repository is **fully independent**: it does not depend on any external
-project checkout. The RISC-V toolchain is rebuilt from upstream sources with a
-small set of custom-opcode patches shipped here.
+The accelerator implements six functional units, each with a software
+reference and a hardware back-end that are checked against each other
+(bit-exact) in RTL simulation:
+
+| Operation   | Instruction | Test app               |
+|-------------|-------------|------------------------|
+| Encoding    | `hvenc`     | `fhrr_encode_test`     |
+| Binding     | `hvbind`    | `fhrr_bind_test`       |
+| Bundling    | `hvbundle`  | `fhrr_bundle_test`     |
+| Similarity  | `hvsim`     | `fhrr_similarity_test` |
+| Clipping    | `hvclip`    | `fhrr_clip_test`       |
+| Permutation | `hvperm`    | `fhrr_permute_test`    |
 
 ---
 
@@ -24,20 +35,15 @@ small set of custom-opcode patches shipped here.
 
 ```
 .
-├── pulpino-klessydra/     Full PULPino + Klessydra SoC (RTL, testbench, sw)
-│   └── ips/Morph/klessydra-m/
-│       ├── RTL-FHRR_Unit.vhd          The FHRR-HDCU accelerator
-│       ├── RTL-HDC_BSC_Unit.vhd       Binary spatter-code unit
-│       ├── RTL-MCR_Unit.vhd           Multiply-clip-round unit
-│       └── ...                        Morph core pipeline, VCU, SPMs, ...
+├── pulpino-klessydra/                PULPino SoC + Klessydra-Morph core
+│   ├── ips/Morph/klessydra-m/        Core + accelerator RTL (VHDL)
+│   │   └── RTL-FHRR_Unit.vhd         The FHRR-HDCU accelerator
 │   └── sw/
-│       ├── apps/klessydra_tests/klessydra_hdc_tests/   FHRR test suite
-│       └── libs/klessydra_lib/hdc_libs/                C++ HDC library
-├── toolchain-hdc/         Custom RISC-V toolchain build kit
-│   ├── build-toolchain.sh  Clones upstream, applies HDC opcodes, builds
-│   ├── riscv-opc.c         Modified binutils opcode table (HDC/FHRR insns)
-│   ├── riscv-opc.h         Modified binutils opcode macros
-│   └── make_links.sh       Creates the klessydra-unknown-elf-* symlinks
+│       ├── cmake_configure.klessydra-m.gcc.sh   Build configuration script
+│       ├── apps/klessydra_tests/klessydra_hdc_tests/   FHRR test apps
+│       ├── libs/klessydra_lib/hdc_libs/                C++ HDC library (SW + HW back-ends)
+│       └── utils/                    Regression / sweep scripts
+├── toolchain-hdc/                    RISC-V toolchain build kit (custom HDC opcodes)
 └── README.md
 ```
 
@@ -47,14 +53,17 @@ small set of custom-opcode patches shipped here.
 
 Tested on Ubuntu 20.04 / 22.04.
 
+* **ModelSim / QuestaSim** (tested with ModelSim SE-64 2020.4), with `vsim`
+  in your `PATH`.
+* Build dependencies:
+
 ```bash
-# Toolchain + simulation build dependencies
 sudo apt update
 sudo apt install -y git cmake tcsh autoconf automake autotools-dev curl \
     libmpc-dev libmpfr-dev libgmp-dev gawk build-essential bison flex \
     texinfo gperf libtool patchutils bc zlib1g-dev libexpat-dev
 
-# The IP/build scripts still use Python 2.7
+# The simulation-script generator still uses Python 2.7 + PyYAML
 sudo apt install -y python2.7
 curl https://bootstrap.pypa.io/pip/2.7/get-pip.py --output get-pip.py
 sudo python2 get-pip.py
@@ -62,127 +71,126 @@ pip2 install pyyaml==5.4.1
 sudo ln -sf "$(which python2.7)" /usr/local/bin/python
 ```
 
-A **ModelSim/QuestaSim** installation is required to run the RTL simulations
-(`make *.vsimc` targets).
-
 ---
 
-## Step 1 — Build the custom RISC-V toolchain
-
-The FHRR/HDC custom instructions require a `binutils` with the modified opcode
-tables shipped in `toolchain-hdc/`. Build the toolchain once:
+## Step 1 — Build the RISC-V toolchain (once)
 
 ```bash
 cd toolchain-hdc
-./build-toolchain.sh                 # installs to $HOME/riscv-gnu-toolchain-hdc-build
+./build-toolchain.sh          # installs to $HOME/riscv-gnu-toolchain-hdc-build
+export PATH="$HOME/riscv-gnu-toolchain-hdc-build/bin:$PATH"   # add to ~/.bashrc
+klessydra-unknown-elf-gcc --version                          # check
 ```
 
-Then add it to your `PATH` (append to `~/.bashrc` to make it permanent):
-
-```bash
-export PATH="$HOME/riscv-gnu-toolchain-hdc-build/bin:$PATH"
-```
-
-Verify the custom target is visible:
-
-```bash
-klessydra-unknown-elf-gcc --version
-```
-
-> The script clones the **upstream** `riscv-gnu-toolchain`, pins `binutils`
-> (2.39), `gcc` (12.2.0) and `newlib`, overlays `riscv-opc.c` / `riscv-opc.h`,
-> and builds an `rv32ima / ilp32` newlib cross-toolchain. Use
-> `JOBS=<n>` and an optional install-prefix argument to customise the build.
+The script clones the upstream `riscv-gnu-toolchain` (binutils 2.39, gcc
+12.2.0, newlib), applies the HDC opcode tables in `toolchain-hdc/` and builds
+an `rv32ima/ilp32` cross-compiler. Use `JOBS=<n>` to set the build
+parallelism; the first argument optionally overrides the install prefix.
 
 ---
 
-## Step 2 — Build and simulate the SoC ("Hello World")
-
-All IP cores are already vendored in this repository, so there is **no need to
-fetch anything** — just generate the simulation scripts from the local sources:
+## Step 2 — Generate the simulation scripts (once)
 
 ```bash
 cd pulpino-klessydra
-./generate-scripts.py                # builds the vsim compile scripts from ips/
-
-cd sw
-mkdir -p build
-cp cmake_configure.klessydra-m.gcc.sh build/
-cd build
-./cmake_configure.klessydra-m.gcc.sh
-make vcompile                        # compile the Klessydra-Morph RTL
-make helloworld_kless.vsimc          # build + run Hello World in simulation
+./generate-scripts.py
 ```
-
-The default Morph configuration instantiates the **DSP** accelerator
-(`KLESS_accl_sel=0`).
 
 ---
 
-## Step 3 — Run the FHRR / HDC experiments
+## Step 3 — Run the FHRR tests
 
-The FHRR accelerator and its test suite are selected through the
-`cmake_configure` variables (all overridable from the environment):
-
-| Variable            | Meaning                                             | Default |
-|---------------------|-----------------------------------------------------|---------|
-| `KLESS_accl_sel`    | Accelerator in Morph: `0` = DSP, `1` = **FHRR**     | `0`     |
-| `KLESS_SIMD`        | SIMD width (functional units / SPM banks, pow. of 2)| `2`     |
-| `KLESS_Addr_Width`  | Scratchpad address width (SPM size = `2^Addr_Width`)| `14`    |
-
-Configure a build with the FHRR accelerator enabled and run a test:
+Create a build directory **inside `pulpino-klessydra/sw/`** and run the
+configuration script from there (always call it as `../cmake_configure...`,
+do not copy it into the build directory):
 
 ```bash
 cd pulpino-klessydra/sw
-mkdir -p build_fhrr
-cp cmake_configure.klessydra-m.gcc.sh build_fhrr/
-cd build_fhrr
+mkdir build_fhrr && cd build_fhrr
 
-# Select the FHRR accelerator and (optionally) the SIMD width
-KLESS_accl_sel=1 KLESS_SIMD=8 ./cmake_configure.klessydra-m.gcc.sh
-make vcompile
+KLESS_accl_sel=1 KLESS_SIMD=8 KLESS_Addr_Width=16 FHRR_TEST_VECTOR_ELEMENTS=256 \
+    ../cmake_configure.klessydra-m.gcc.sh
+make vcompile                      # compile the RTL for ModelSim
 
-# Individual FHRR kernels (test name + ".vsimc" suffix):
+make fhrr_encode_test.vsimc
 make fhrr_bind_test.vsimc
 make fhrr_bundle_test.vsimc
-make fhrr_clip_test.vsimc
-make fhrr_encode_test.vsimc
 make fhrr_similarity_test.vsimc
+make fhrr_clip_test.vsimc
 make fhrr_permute_test.vsimc
-
-# End-to-end UCIHAR classification inference:
-make fhrr_ucihar_inference.vsimc
 ```
 
-The full FHRR test sources live in
-`sw/apps/klessydra_tests/klessydra_hdc_tests/`, and the C++ HDC library
-(software and hardware back-ends, `hdc_fhrr_sw.cpp` / `hdc_fhrr_hw.cpp`) in
-`sw/libs/klessydra_lib/hdc_libs/`.
+Each test runs the operation with the software back-end and with the
+hardware accelerator, compares the two results bit by bit and prints, e.g.:
 
-### Batch regression / SIMD sweeps
+```
+[fhrr_permute] shift=   0 PASS  (sw_cy=4681 hw_cy=926)
+FHRR_RESULT op=permute simd=8 hv_elements=256 status=PASS sw_cycles=4681 hw_cycles=926 hw_accel_cycles=281 speedup=5.055
+...
+[fhrr_permute_test] PASS
+```
 
-Helper scripts to run the whole FHRR suite or sweep configurations are provided
-in `sw/utils/`:
+* `sw_cycles` / `hw_cycles`: cycles of the whole software / hardware library
+  call (the hardware call includes moving the vectors to and from the
+  accelerator scratchpads);
+* `hw_accel_cycles`: cycles counted inside the accelerator;
+* `speedup` = `sw_cycles / hw_cycles`.
+
+### Configuration
+
+All variables are read from the environment by `cmake_configure`. After
+changing any of them, re-run `../cmake_configure.klessydra-m.gcc.sh` in the
+build directory (use one build directory per configuration).
+
+| Variable                    | Meaning                                                  | Default |
+|-----------------------------|----------------------------------------------------------|---------|
+| `KLESS_accl_sel`            | Accelerator: `0` = DSP, `1` = **FHRR** (needed for the tests above) | `0` |
+| `KLESS_SIMD`                | Parallelism *P* (lanes per cycle): 1, 2, 4, 8, 16, 32    | `2`     |
+| `KLESS_Addr_Width`          | Scratchpad size = `2^Addr_Width` bytes                   | `14`    |
+| `FHRR_TEST_VECTOR_ELEMENTS` | Hypervector size *D* used by the tests                   | `16`    |
+| `FHRR_TEST_ENCODE_ROWS`     | Number of features encoded by `fhrr_encode_test` (≤ 31)  | `2`     |
+| `FHRR_TEST_FIXED_SEED`      | Fixed seed for the pseudo-random test vectors            | from cycle counter |
+
+Example: *P* = 32, *D* = 1024:
 
 ```bash
-sw/utils/run-fhrr-regression.sh        # run the full FHRR test suite
-sw/utils/run-fhrr-simd-hv-campaign.sh  # sweep SIMD widths / HV dimensionalities
+cd pulpino-klessydra/sw
+mkdir build_p32_d1024 && cd build_p32_d1024
+KLESS_accl_sel=1 KLESS_SIMD=32 KLESS_Addr_Width=16 FHRR_TEST_VECTOR_ELEMENTS=1024 \
+    ../cmake_configure.klessydra-m.gcc.sh
+make vcompile
+make fhrr_permute_test.vsimc
 ```
+
+Constraints: *D* must be a multiple of *P* (and *D* ≥ *P*), and one hypervector
+(`4·D` bytes) must fit in a scratchpad (`KLESS_Addr_Width=16` covers
+*D* ≤ 2048 with margin).
+
+### Regression and sweeps
+
+```bash
+cd pulpino-klessydra/sw
+# all six FHRR tests on an already configured build directory
+utils/run-fhrr-regression.sh --build-dir build_fhrr
+
+# sweep of parallelism P and hypervector size D (one build per point)
+utils/run-fhrr-simd-hv-campaign.sh --simd 1,8,32 --hv 256,512,1024 --fixed-seed 305419896
+```
+
+Logs and a markdown summary table are written under the build directories.
 
 ---
 
 ## FPGA synthesis
 
-The Morph core with the FHRR accelerator targets the Xilinx Zynq UltraScale+
-**ZCU106** (`xczu7ev-ffvc1156-2-e`). The synthesizable RTL is entirely under
-`pulpino-klessydra/ips/Morph/klessydra-m/`; use those VHDL sources to create a
-standalone Vivado project for area/power/timing characterisation.
+The design targets the Xilinx Zynq UltraScale+ **ZCU106**
+(`xczu7ev-ffvc1156-2-e`). All synthesizable sources are in
+`pulpino-klessydra/ips/Morph/klessydra-m/`; create a standalone Vivado project
+from those VHDL files (top: `klessydra_top`) for area / power / timing.
 
 ---
 
 ## Citation
-
-If you use this work, please cite the accompanying paper:
 
 ```bibtex
 @inproceedings{klessydra_fhrr_apccas2026,
@@ -195,6 +203,6 @@ If you use this work, please cite the accompanying paper:
 
 ## License
 
-The Klessydra and PULPino sources retain their original licenses (see
-`pulpino-klessydra/LICENSE`). The custom opcode modifications in `toolchain-hdc/`
+The Klessydra and PULPino sources keep their original licenses (see
+`pulpino-klessydra/LICENSE`). The opcode modifications in `toolchain-hdc/`
 follow the license of upstream GNU binutils (GPL).

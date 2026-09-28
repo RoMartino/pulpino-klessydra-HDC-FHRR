@@ -21,7 +21,9 @@ Makefile.cmake
 # Simulation work products
 work/
 vsim/work/
-vsim/vcompile/
+vsim/vcompile/ips/
+vsim/vcompile/modelsim.ini
+vsim/vcompile/modelsim_libs/
 vsim/execution_trace.txt
 transcript
 *.wlf

@@ -5,7 +5,10 @@ pulpino-klessydra/sw/build*/
 # ---- Simulation work products ----
 **/work/
 pulpino-klessydra/vsim/work/
-pulpino-klessydra/vsim/vcompile/
+# vcompile/: hand-written scripts are tracked, generated parts are not
+pulpino-klessydra/vsim/vcompile/ips/
+pulpino-klessydra/vsim/vcompile/modelsim.ini
+pulpino-klessydra/vsim/vcompile/modelsim_libs/
 pulpino-klessydra/vsim/execution_trace.txt
 transcript
 *.wlf

@@ -567,6 +567,7 @@ module core_region
         .RV32E                   (KLESS_RV32E),
         .RV32M                   (KLESS_RV32M),
         .accl_en                 (KLESS_accl_en),
+        .accl_sel                (KLESS_accl_sel),
         .superscalar_exec_en     (KLESS_superscalar_exec_en),
         .morph_en                (KLESS_morph_en),
         .fetch_stage_en          (KLESS_fetch_stage_en),
@@ -583,43 +584,7 @@ module core_region
         .MHPMCOUNTER_EN          (KLESS_MHPMCOUNTER_EN),
         .count_all               (KLESS_count_all),
         .debug_en                (KLESS_debug_en),
-        .tracer_en               (KLESS_tracer_en),
-        // [R3-2 BUG2 fix, v3 -- final] `klessydra_top` (STR-Klessydra_Top.vhd)
-        // originally had NO `accl_sel` generic -- the pre-existing
-        // `.accl_sel(KLESS_accl_sel)` association (removed here, v2) silently
-        // bound to nothing, so `BSC_en`/`FHRR_en`/`MCR_en`/`DSP_en` (which
-        // select RTL-VCU_Unit.vhd's mutually-exclusive gen_HDC/gen_FHRR/
-        // gen_MCRC/gen_DSP generate branches) always defaulted to '0',
-        // leaving `busy_hdc` permanently undriven and all HDCU opcodes
-        // permanently non-dispatched (root cause, diagnosed pre-session, see
-        // revision_artifacts/R3-2_systemlevel/BUG2_diagnosis.md).
-        // v1 (adding named `.BSC_en(1'b0)`/`.FHRR_en(cond?1'b1:1'b0)`/...
-        // associations, keeping the stray `.accl_sel`) compiled clean but an
-        // interactive `vsim`/`examine` probe (this session) showed
-        // `FHRR_en=X`, `BSC_en=U` at elaboration instead of the intended
-        // `1`/`0` -- i.e. the values were NOT actually applied.
-        // v2 (removing the stray `.accl_sel` association, hypothesizing it
-        // poisoned the rest of the list) did NOT fix it either -- re-probed,
-        // still `FHRR_en=X`/`BSC_en=U`.
-        // Root cause of the SECOND issue (found by probing generic types
-        // with `describe`): `BSC_en`/`FHRR_en`/`MCR_en`/`DSP_en` were typed
-        // `std_logic` on the VHDL side, and std_logic-typed generics do not
-        // bind reliably when driven by name from a SystemVerilog
-        // instantiation in this Questa 2020.4 mixed-language flow (regardless
-        // of whether the driving expression is a literal or a computed
-        // value) -- while natural/integer-typed generics in the very same
-        // generic map (accl_en, SIMD, THREAD_POOL_SIZE, ...) bind correctly.
-        // v3 (this fix): changed the generic TYPE from std_logic to natural
-        // in RTL-VCU_Unit.vhd and STR-Klessydra_Top.vhd (both the entity and
-        // its internal VCU component declaration), and pass plain SV
-        // integers (0/1) here instead of 1-bit literals/ternaries. Verified
-        // by re-probing: `FHRR_en=1`, `BSC_en=0`, `DSP_en=0` at elaboration
-        // (KLESS_accl_sel=1), and `busy_hdc` no longer reported as an
-        // "Uninitialized out port" by vsim/vopt.
-        .BSC_en                  ( 0                                  ),
-        .FHRR_en                 ( KLESS_accl_sel == 1 ? 1 : 0        ),
-        .MCR_en                  ( 0                                  ),
-        .DSP_en                  ( KLESS_accl_sel == 0 ? 1 : 0        )
+        .tracer_en               (KLESS_tracer_en)
       )
       RISCV_CORE
       (

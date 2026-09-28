@@ -7,7 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SW_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 BUILD_DIR="${SW_DIR}/build_fhrr"
-TIMEOUT_SEC=60
+TIMEOUT_SEC=1800
 MODE="vsimc"
 LOG_ROOT=""
 
@@ -17,6 +17,7 @@ DEFAULT_TESTS=(
   "fhrr_clip_test"
   "fhrr_encode_test"
   "fhrr_similarity_test"
+  "fhrr_permute_test"
 )
 
 print_usage() {
@@ -25,7 +26,7 @@ Usage: run-fhrr-regression.sh [options] [test_name ...]
 
 Options:
   --build-dir PATH   Build directory to use. Default: sw/build_fhrr
-  --timeout SEC      Timeout for each test. Default: 60
+  --timeout SEC      Timeout for each test. Default: 1800
   --mode SUFFIX      Make target suffix. Default: vsimc
   --log-dir PATH     Directory where regression logs are stored.
   --help             Show this help message.

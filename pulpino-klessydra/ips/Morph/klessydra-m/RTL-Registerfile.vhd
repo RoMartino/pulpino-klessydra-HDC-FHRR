@@ -69,10 +69,10 @@ entity REGISTERFILE is
     LS_WB_EN                : in  std_logic;
     IE_WB_EN                : in  std_logic;
     MUL_WB_EN               : in  std_logic;
-    IE_WB                   : in  std_logic_vector(31 downto 0);
-    MUL_WB                  : in  std_logic_vector(31 downto 0);
     FP_LS_WB_EN             : in  std_logic;
     FP_RES_WB_EN            : in  std_logic;
+    IE_WB                   : in  std_logic_vector(31 downto 0);
+    MUL_WB                  : in  std_logic_vector(31 downto 0);
     LS_WB                   : in  std_logic_vector(31 downto 0);
     FP_LS_WB                : in  std_logic_vector(fp_size-1 downto 0);
     FP_RES_WB               : in  std_logic_vector(fp_size-1 downto 0);
@@ -145,7 +145,6 @@ architecture RF of REGISTERFILE is
   signal RS2_Data_FLOAT_wire    : std_logic_vector(fp_size-1 downto 0);
   signal RD_Data_FLOAT_wire     : std_logic_vector(fp_size-1 downto 0);
 
-
   -- instruction operands
   signal RS1_Addr_IE            : std_logic_vector(4 downto 0);   -- debugging signals
   signal RS2_Addr_IE            : std_logic_vector(4 downto 0);   -- debugging signals
@@ -194,13 +193,13 @@ begin
 
   RF_WR_ACCESS : process(all)  -- synch single state process
   begin
-      for h in harc_range loop
+      for h in harc_range loop -- hardwire register 'x0' to 0
         regfile(h)(0) <= (others => '0');
       end loop;
       if WB_EN_lat = '1' then
         regfile(harc_LAT)(rd(instr_word_LAT)) <= RF_res;
       end if;
-    if RV32F = 1 then
+      if RV32F = 1 then
         if FP_WB_EN_lat = '1' then
           fp_regfile(harc_LAT)(rd(instr_word_FP_LAT)) <= FP_RF_res;
         end if;
@@ -224,7 +223,7 @@ begin
       if WB_EN = '1' then
         regfile(harc_WB)(rd(instr_word_WB)) <= WB_RD;
       end if;
-    if RV32F = 1 then
+      if RV32F = 1 then
         if FP_WB_EN = '1' then
           fp_regfile(harc_FP_WB)(rd(instr_word_FP_WB)) <= FP_WB_RD;
         end if;
@@ -240,7 +239,7 @@ begin
     if rst_ni = '0' then
       WB_EN_lat <= '0';
       harc_LAT <= THREAD_POOL_SIZE-1;
-      instr_word_LAT <= (others => '0');
+      instr_word_LAT    <= (others => '0');
       instr_word_FP_LAT <= (others => '0');
     elsif rising_edge(clk_i) then
       harc_LAT    <= harc_WB;
@@ -262,22 +261,23 @@ begin
 
         if accl_en = 1 then
           if dsp_to_jump_wire = '0' then
-            RD_Data_IE <= regfile(harc_ID)(rd(instr_word_ID)); -- only the HDCU unit reads the accelerator
+            RD_Data_IE <= regfile(harc_ID)(rd(instr_word_ID)); -- only the DSP unit reads the accelerator
           else
             RD_Data_IE <= regfile(harc_ID)(0);
           end if;
         end if;
 
-         if RV32F = 1 then
+        if RV32F = 1 then
           RS1_Data_FLOAT <= RS1_Data_FLOAT_wire; 
           RS2_Data_FLOAT <= RS2_Data_FLOAT_wire;
           RD_Data_FLOAT  <= RD_Data_FLOAT_wire;
         end if;
+
        -- pragma translate_off
-        RD_Data_IE  <= regfile(harc_ID)(rd(instr_word_ID)) when  morph_en = 0 or bypass_rd_read = '0' or harc_ID /= harc_WB else WB_RD; -- reading the 'rd' data here is only for debugging purposes if the acclerator is disabled
-        RS1_Addr_IE <= std_logic_vector(to_unsigned(rs1(instr_word_ID), 5)); -- debugging signals
-        RS2_Addr_IE <= std_logic_vector(to_unsigned(rs2(instr_word_ID), 5)); -- debugging signals
-        RD_Addr_IE  <= std_logic_vector(to_unsigned(rd(instr_word_ID), 5)); -- debugging signals
+        RD_Data_IE    <= regfile(harc_ID)(rd(instr_word_ID)) when  morph_en = 0 or bypass_rd_read = '0' or harc_ID /= harc_WB else WB_RD; -- reading the 'rd' data here is only for debugging purposes if the acclerator is disabled
+        RS1_Addr_IE   <= std_logic_vector(to_unsigned(rs1(instr_word_ID), 5)); -- debugging signals
+        RS2_Addr_IE   <= std_logic_vector(to_unsigned(rs2(instr_word_ID), 5)); -- debugging signals
+        RD_Addr_IE    <= std_logic_vector(to_unsigned(rd(instr_word_ID), 5)); -- debugging signals
        -- pragma translate_on
        ----------------------------------------------------------------------------------------------------------------------------------------------------
       end if;  -- instr. conditions
@@ -289,13 +289,9 @@ begin
     end if;  -- clk
   end process;
 
-  RS1_Data_IE_wire <= regfile(harc_ID)(rs1(instr_word_ID)) when morph_en = 0 or bypass_rs1 = '0' or harc_ID /= harc_WB else WB_RD; 
+  RS1_Data_IE_wire <= regfile(harc_ID)(rs1(instr_word_ID)) when morph_en = 0 or bypass_rs1 = '0' or harc_ID /= harc_WB else WB_RD;
   RS2_Data_IE_wire <= regfile(harc_ID)(rs2(instr_word_ID)) when morph_en = 0 or bypass_rs2 = '0' or harc_ID /= harc_WB else WB_RD;
   RD_Data_IE_wire  <= regfile(harc_ID)(rd(instr_word_ID))  when morph_en = 0 or bypass_rd_read  = '0' or harc_ID /= harc_WB else WB_RD;
-
-  RS1_Data_FLOAT_wire <= fp_regfile(harc_ID)(rs1(instr_word_ID)) when RV32F = 1 and (morph_en = 0 or bypass_fp_rs1 = '0' or harc_ID /= harc_WB) else FP_WB_RD;
-  RS2_Data_FLOAT_wire <= fp_regfile(harc_ID)(rs2(instr_word_ID)) when RV32F = 1 and (morph_en = 0 or bypass_fp_rs2 = '0' or harc_ID /= harc_WB) else FP_WB_RD;
-  RD_Data_FLOAT_wire  <= fp_regfile(harc_ID)(rd(instr_word_ID))  when RV32F = 1 and (morph_en = 0 or bypass_fp_rd_read = '0' or harc_ID /= harc_WB) else FP_WB_RD;
 
   RS1_Data_FLOAT_wire <= fp_regfile(harc_ID)(rs1(instr_word_ID)) when RV32F = 1 and (morph_en = 0 or bypass_fp_rs1 = '0' or harc_ID /= harc_WB) else FP_WB_RD;
   RS2_Data_FLOAT_wire <= fp_regfile(harc_ID)(rs2(instr_word_ID)) when RV32F = 1 and (morph_en = 0 or bypass_fp_rs2 = '0' or harc_ID /= harc_WB) else FP_WB_RD;
@@ -326,7 +322,7 @@ begin
       end if;
       if accl_en = 1 then
         if rd(instr_word_ID) /= 0 then
-          RD_Data_IE_wire <= regfile_lutram_rd(32*harc_ID+rd(instr_word_ID)) when bypass_rd_read = '0' or harc_ID /= harc_WB else WB_RD; -- only the HDCU unit reads the accelerator
+          RD_Data_IE_wire <= regfile_lutram_rd(32*harc_ID+rd(instr_word_ID)) when bypass_rd_read = '0' or harc_ID /= harc_WB else WB_RD; -- only the DSP unit reads the accelerator
         else
           RD_Data_IE_wire <= (others => '0');
         end if;
@@ -433,6 +429,7 @@ begin
   harc_FP_WB       <= harc_LS_WB when FP_LS_WB_EN else harc_FP_RES_WB;
   FP_WB_EN         <= FP_LS_WB_EN or FP_RES_WB_EN;
   FP_WB_RD         <= FP_LS_WB when FP_LS_WB_EN else FP_RES_WB when FP_RES_WB_EN;
+
 --------------------------------------------------------------------- end of WB Stage ----------------
 ------------------------------------------------------------------------------------------------------
 
@@ -500,7 +497,7 @@ begin
 --  ╚════██║██╔═══╝ ██║╚██╔╝██║    ██║╚██╔╝██║██╔══██║██╔═══╝ ██╔═══╝ ██╔══╝  ██╔══██╗  --
 --  ███████║██║     ██║ ╚═╝ ██║    ██║ ╚═╝ ██║██║  ██║██║     ██║     ███████╗██║  ██║  --
 --  ╚══════╝╚═╝     ╚═╝     ╚═╝    ╚═╝     ╚═╝╚═╝  ╚═╝╚═╝     ╚═╝     ╚══════╝╚═╝  ╚═╝  --
-------------------------------------------------------------------------------------------                                                           
+------------------------------------------------------------------------------------------
 
   spm_mapper : if accl_en = 1 generate 
   Spm_Addr_Mapping : process(all)

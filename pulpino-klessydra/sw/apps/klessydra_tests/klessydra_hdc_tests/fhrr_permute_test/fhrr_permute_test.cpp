@@ -19,12 +19,15 @@
 #include "fhrr_test_common.hpp"
 
 #ifndef FHRR_PERMUTE_TEST_ELEMENTS
-// [Op-N2 Phase B] HV size = 4 phases. With SIMD=2 (kSimdLanes=2) this is
-// 2 SIMD chunks, exercising the cross-chunk splice introduced in Phase B
-// (intra_shift > 0 alone tested intra-chunk; chunk_shift > 0 now too).
-// Element count must be a multiple of kSimdLanes for the HW path; SW path
-// covers arbitrary tail sizes.
-#define FHRR_PERMUTE_TEST_ELEMENTS 4
+#if FHRR_TEST_VECTOR_ELEMENTS > 0
+// Campaign override (same knob as the other FHRR tests, e.g. SIMD/HV sweeps).
+#define FHRR_PERMUTE_TEST_ELEMENTS FHRR_TEST_VECTOR_ELEMENTS
+#else
+// Default HV size = 16 phases (same default as the other FHRR tests).
+// The element count must be a multiple of the SIMD lanes for the HW path;
+// the SW path covers arbitrary sizes.
+#define FHRR_PERMUTE_TEST_ELEMENTS 16
+#endif
 #endif
 
 #ifndef FHRR_PERMUTE_TEST_SEED
@@ -107,6 +110,17 @@ int run_one_shift(std::int32_t shift, const std::uint32_t* input) {
                                                         kPermuteElements);
     if (compare_status != 0) {
         std::printf("[fhrr_permute] SW=HW MISMATCH at shift=%d\n", static_cast<int>(shift));
+        if (kPermuteElements <= 64) {  // debug dump: low byte of each phase word
+            const std::uint32_t* rows[3] = {input, sw_words, hw_words};
+            const char* names[3] = {"in", "sw", "hw"};
+            for (int r = 0; r < 3; ++r) {
+                std::printf("[fhrr_permute_dump] %s:", names[r]);
+                for (std::size_t i = 0; i < kPermuteElements; ++i) {
+                    std::printf(" %02X", static_cast<unsigned>(rows[r][i] & 0xFFu));
+                }
+                std::printf("\n");
+            }
+        }
         tests::print_result_line("permute", kPermuteElements, false, timing);
         return compare_status;
     }

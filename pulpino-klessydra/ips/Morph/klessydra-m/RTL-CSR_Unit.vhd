@@ -37,7 +37,6 @@ entity CSR_Unit is
     replicate_accl_en       : natural;
     accl_en                 : natural;
     MCYCLE_EN               : natural;
-    HDCU_PERF_EN            : natural;
     MINSTRET_EN             : natural;
     MHPMCOUNTER_EN          : natural;
     RF_CEIL                 : natural;
@@ -48,10 +47,17 @@ entity CSR_Unit is
     pc_IE                       : in  std_logic_vector(31 downto 0);
     ie_except_data              : in  std_logic_vector(31 downto 0);
     ls_except_data              : in  std_logic_vector(31 downto 0);
-    hdc_except_data             : in  array_2d(ACCL_NUM - 1 downto 0)(31 downto 0);
+    dsp_except_data             : in  array_2d(ACCL_NUM - 1 downto 0)(31 downto 0);
+    hdcu_performance_counter    : in  array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0);
+    hdcu_bind_perf_counter      : in  array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0);
+    hdcu_bundle_perf_counter    : in  array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0);
+    hdcu_clip_perf_counter      : in  array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0);
+    hdcu_sim_perf_counter       : in  array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0);
+    hdcu_perm_perf_counter      : in  array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0);
+    hdcu_enc_perf_counter       : in  array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0);
     served_ie_except_condition  : in  std_logic_vector(THREAD_POOL_SIZE-1 downto 0);
     served_ls_except_condition  : in  std_logic_vector(THREAD_POOL_SIZE-1 downto 0);
-    served_hdc_except_condition : in  std_logic_vector(THREAD_POOL_SIZE-1 downto 0);
+    served_dsp_except_condition : in  std_logic_vector(THREAD_POOL_SIZE-1 downto 0);
     harc_sleep                  : in  std_logic_vector(THREAD_POOL_SIZE-1 downto 0);
     harc_EXEC                   : in  natural range THREAD_POOL_SIZE-1 downto 0;
     harc_to_csr                 : in  natural range THREAD_POOL_SIZE_GLOBAL-1 downto 0;
@@ -75,7 +81,7 @@ entity CSR_Unit is
     csr_instr_done              : out std_logic;
     csr_access_denied_o         : out std_logic;
     csr_rdata_o                 : out std_logic_vector (31 downto 0);
-    HVSIZE                      : out array_2d(THREAD_POOL_SIZE-1 downto 0)(Addr_Width downto 0); 
+    MVSIZE                      : out array_2d(THREAD_POOL_SIZE-1 downto 0)(Addr_Width downto 0); 
     MVTYPE                      : out array_2d(THREAD_POOL_SIZE-1 downto 0)(3 downto 0); -- CSR Size follows the RVV standard
     MPSCLFAC                    : out array_2d(THREAD_POOL_SIZE-1 downto 0)(4 downto 0);
     MHARTID                     : out array_2d(THREAD_POOL_SIZE-1 downto 0)(9 downto 0);  -- AAA adjust the size of mhartID
@@ -104,16 +110,7 @@ entity CSR_Unit is
     sw_irq                      : in  std_logic_vector(THREAD_POOL_SIZE_GLOBAL-1 downto 0);
     sw_irq_i                    : in  std_logic_vector(THREAD_POOL_SIZE_GLOBAL-1 downto 0);
     sw_irq_pending              : in  std_logic_vector(THREAD_POOL_SIZE_GLOBAL-1 downto 0);
-    source_hartid_i             : in  natural range THREAD_POOL_SIZE_GLOBAL-1 downto 0;  -- AAA remember to change the size of this to 0 to TPS_GLBL_CEIL
-    -- From HDCU --------------------------------------------------------
-    hdcu_performance_counter    : in  array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0);
-    hdcu_bind_perf_counter      : in  array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0);
-    hdcu_bundle_perf_counter    : in  array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0);
-    hdcu_clip_perf_counter      : in  array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0);
-    hdcu_sim_perf_counter       : in  array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0);
-    hdcu_perm_perf_counter      : in  array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0);
-    hdcu_search_perf_counter    : in  array_2d(THREAD_POOL_SIZE-1 downto 0)(31 downto 0);
-    busy_hdc                    : in  std_logic_vector(ACCL_NUM-1 downto 0)
+    source_hartid_i             : in  natural range THREAD_POOL_SIZE_GLOBAL-1 downto 0  -- AAA remember to change the size of this to 0 to TPS_GLBL_CEIL
     );
 end entity;
 
@@ -123,7 +120,7 @@ architecture CSR of CSR_Unit is
   subtype harc_range is natural range THREAD_POOL_SIZE-1 downto 0;
   subtype accl_range is integer range ACCL_NUM-1 downto 0;
 
-  signal pc_IE_replicated  : array_2d(harc_range)(31 downto 0);	
+  signal pc_IE_replicated : array_2d(harc_range)(31 downto 0);	
 	
   -- Control Status Register (CSR) signals 
   signal PCCRs       : array_2d(harc_range)(31 downto 0);  -- still not implemented
@@ -135,19 +132,6 @@ architecture CSR of CSR_Unit is
   signal MIRQ        : array_2d(harc_range)(31 downto 0);  -- extension, maps external irqs
   signal MBADADDR    : array_2d(harc_range)(31 downto 0);  -- misaligned address containers
 
-  -- HDCU Performance Counters
-  signal HDCU_PERF_CNT : array_2d(harc_range)(31 downto 0);
-  signal HDCU_BIND_CNT : array_2d(harc_range)(31 downto 0);
-  signal HDCU_BUNDL_CNT: array_2d(harc_range)(31 downto 0);
-  signal HDCU_SIM_CNT  : array_2d(harc_range)(31 downto 0);
-  signal HDCU_CLIP_CNT : array_2d(harc_range)(31 downto 0);
-  signal HDCU_PERM_CNT : array_2d(harc_range)(31 downto 0);
-  signal HDCU_SRCH_CNT : array_2d(harc_range)(31 downto 0);
-
-  signal busy_hdc_int  : std_logic_vector(ACCL_NUM-1 downto 0);
-  signal HDCU_MCYCLE   : array_2d(harc_range)(31 downto 0);
- 
-  -- Performance Counters
   signal MCYCLE        : array_2d(harc_range)(31 downto 0);
   signal MINSTRET      : array_2d(harc_range)(31 downto 0);
   signal MHPMCOUNTER3  : array_2d(harc_range)(31 downto 0);
@@ -191,7 +175,7 @@ architecture CSR of CSR_Unit is
 
   signal served_ie_except_condition_lat  : std_logic_vector(harc_range);
   signal served_ls_except_condition_lat  : std_logic_vector(harc_range);
-  signal served_hdc_except_condition_lat : std_logic_vector(harc_range);
+  signal served_dsp_except_condition_lat : std_logic_vector(harc_range);
   signal served_except_condition_lat     : std_logic_vector(harc_range);
   signal served_mret_condition_lat       : std_logic_vector(harc_range);
 
@@ -253,7 +237,7 @@ begin
 
       if rst_ni = '0' then
         if accl_en = 1 then
-          HVSIZE(h)                         <= (others => '0');
+          MVSIZE(h)                         <= (others => '0');
           MVTYPE(h)                         <= MVTYPE_RESET_VALUE;
           MPSCLFAC(h)                       <= MPSCLFAC_RESET_VALUE;
         end if;
@@ -296,41 +280,16 @@ begin
         if (MHPMCOUNTER_EN = 1 or MCYCLE_EN = 1 or MINSTRET_EN = 1) then
           PCER(h)                           <= PCER_RESET_VALUE;
         end if;
-        -----------------------------------------------------------
-        if (HDCU_PERF_EN = 1) then
-          HDCU_PERF_CNT(h)                  <= (others => '0');
-          HDCU_BIND_CNT(h)                  <= (others => '0');
-          HDCU_BUNDL_CNT(h)                 <= (others => '0');
-          HDCU_SIM_CNT(h)                   <= (others => '0');
-          HDCU_CLIP_CNT(h)                  <= (others => '0');
-          HDCU_PERM_CNT(h)                  <= (others => '0');
-          HDCU_SRCH_CNT(h)                  <= (others => '0');
-          HDCU_MCYCLE(h)                    <= (others => '0');
-          busy_hdc_int(0)                   <= '0';
-        end if;
-        -----------------------------------------------------------
         MIP_internal(h)                     <= MIP_RESET_VALUE;
         served_ie_except_condition_lat(h)   <= '0'; 
         served_ls_except_condition_lat(h)   <= '0'; 
-        served_hdc_except_condition_lat(h)  <= '0'; 
+        served_dsp_except_condition_lat(h)  <= '0'; 
         served_except_condition_lat(h)      <= '0';
         csr_instr_done_replicated(h)        <= '0';
         csr_access_denied_o_replicated(h)   <= '0';
         csr_rdata_o_replicated(h)           <= (others => '0');
 
       elsif rising_edge(clk_i) then
-        -- -----------------------------------------------------------------
-        --  HDCU performance counters latch (valori in ingresso  →  registri locali)
-        -- -----------------------------------------------------------------
-        HDCU_PERF_CNT(h)  <= hdcu_performance_counter(h);
-        HDCU_BIND_CNT(h)  <= hdcu_bind_perf_counter(h);
-        HDCU_BUNDL_CNT(h) <= hdcu_bundle_perf_counter(h);
-        HDCU_SIM_CNT(h)   <= hdcu_sim_perf_counter(h);
-        HDCU_CLIP_CNT(h)  <= hdcu_clip_perf_counter(h);
-        HDCU_PERM_CNT(h)  <= hdcu_perm_perf_counter(h);
-        HDCU_SRCH_CNT(h)  <= hdcu_search_perf_counter(h);
-        busy_hdc_int(0)   <= busy_hdc(0);
-
         if HET_CLUSTER_S1_CORE = 0 then
           MHARTID(h) <= std_logic_vector(resize(unsigned(core_id_i) * (THREAD_POOL_SIZE_GLOBAL- THREAD_POOL_SIZE)  + to_unsigned(h, THREAD_ID_SIZE), 10));
         end if;
@@ -351,7 +310,7 @@ begin
         --------------------------------------------------------------------------------------------------------------------------------------------------
         served_ie_except_condition_lat(h)   <= served_ie_except_condition(h);
         served_ls_except_condition_lat(h)   <= served_ls_except_condition(h);
-        served_hdc_except_condition_lat(h)  <= served_hdc_except_condition(h);
+        served_dsp_except_condition_lat(h)  <= served_dsp_except_condition(h);
         served_except_condition_lat(h)      <= served_except_condition(h);
         -- synchronous assignment to MIP_internal bits:
         -- this is Pulpino-specific assignment, i.e. the timer-related IRQ vector value
@@ -441,11 +400,11 @@ begin
           
         --  Exception-caused CSR updating ----------------------------------
         elsif served_except_condition_lat(h) = '1' then
-          if served_hdc_except_condition_lat(h) = '1' then
+          if served_dsp_except_condition_lat(h) = '1' then
             if replicate_accl_en = 1 then
-              MCAUSE_internal(h)     <= hdc_except_data(h);  -- passed from hdc Unit
+              MCAUSE_internal(h)     <= dsp_except_data(h);  -- passed from DSP Unit
             elsif replicate_accl_en = 0 then
-              MCAUSE_internal(h)     <= hdc_except_data(0);  -- passed from hdc Unit
+              MCAUSE_internal(h)     <= dsp_except_data(0);  -- passed from DSP Unit
             end if;
           elsif served_ls_except_condition_lat(h) = '1' then
             MCAUSE_internal(h)     <= ls_except_data;  -- passed from LS unit
@@ -484,24 +443,24 @@ begin
             case csr_addr_i is
 
               -- Vector size register, custom CSR reg for the hardware accelerator that defines the vector size in bytes
-              when HVSIZE_addr =>
+              when MVSIZE_addr =>
                 if accl_en = 1 then
                   case csr_op_i is
                     when CSRRW|CSRRWI =>
-                      csr_rdata_o_replicated(h)(Addr_Width downto 0) <= HVSIZE(h);
+                      csr_rdata_o_replicated(h)(Addr_Width downto 0) <= MVSIZE(h);
                       csr_rdata_o_replicated(h)(31 downto Addr_Width +1) <= (others => '0');
-                      HVSIZE(h) <= csr_wdata_i(Addr_Width downto 0);
+                      MVSIZE(h) <= csr_wdata_i(Addr_Width downto 0);
                     when CSRRS|CSRRSI =>
-                      csr_rdata_o_replicated(h)(Addr_Width downto 0) <= HVSIZE(h);
+                      csr_rdata_o_replicated(h)(Addr_Width downto 0) <= MVSIZE(h);
                       csr_rdata_o_replicated(h)(31 downto Addr_Width +1) <= (others => '0');
                       if(rs1(instr_word_IE) /= 0) then
-                        HVSIZE(h) <= (HVSIZE(h) or csr_wdata_i(Addr_Width downto 0));
+                        MVSIZE(h) <= (MVSIZE(h) or csr_wdata_i(Addr_Width downto 0));
                       end if;
                     when CSRRC|CSRRCI =>
-                      csr_rdata_o_replicated(h)(Addr_Width downto 0) <= HVSIZE(h);
+                      csr_rdata_o_replicated(h)(Addr_Width downto 0) <= MVSIZE(h);
                       csr_rdata_o_replicated(h)(31 downto Addr_Width +1) <= (others => '0');
                       if(rs1(instr_word_IE) /= 0) then
-                        HVSIZE(h) <= (HVSIZE(h) and not(csr_wdata_i(Addr_Width downto 0)));
+                        MVSIZE(h) <= (MVSIZE(h) and not(csr_wdata_i(Addr_Width downto 0)));
                       end if;
                     when others =>
                       null;
@@ -807,192 +766,6 @@ begin
                   csr_rdata_o_replicated(h) <= (others => '0');
                 end if;
 
-              -------------------- HDCU Performance Counters --------------------
-              when HDCU_MCYCLE_addr =>
-                if (HDCU_PERF_EN = 1) then
-                  case csr_op_i is
-                    when CSRRW|CSRRWI =>
-                      csr_rdata_o_replicated(h) <= std_logic_vector(unsigned(HDCU_PERF_CNT(h)) + unsigned(MCYCLE(h)));
-                      HDCU_MCYCLE(h)            <= csr_wdata_i;
-                    when CSRRS|CSRRSI =>
-                      csr_rdata_o_replicated(h) <= std_logic_vector(unsigned(HDCU_PERF_CNT(h)) + unsigned(MCYCLE(h)));
-                      if(rs1(instr_word_IE) /= 0) then
-                        HDCU_MCYCLE(h) <= (HDCU_PERF_CNT(h) or csr_wdata_i);
-                      end if;
-                    when CSRRC|CSRRCI =>
-                      csr_rdata_o_replicated(h) <= std_logic_vector(unsigned(HDCU_PERF_CNT(h)) + unsigned(MCYCLE(h)));
-                      if(rs1(instr_word_IE) /= 0) then
-                        HDCU_MCYCLE(h) <= (HDCU_MCYCLE(h) and not(csr_wdata_i));
-                      end if;
-                    when others =>
-                      null;
-                  end case;
-                else
-                  csr_rdata_o_replicated(h) <= (others => '0');
-                end if;
-              
-              when HDCU_CYCLES_addr =>
-                if (HDCU_PERF_EN = 1) then
-                  case csr_op_i is
-                    when CSRRW|CSRRWI =>
-                      csr_rdata_o_replicated(h) <= HDCU_PERF_CNT(h);
-                      HDCU_PERF_CNT(h)          <= csr_wdata_i;
-                    when CSRRS|CSRRSI =>
-                      csr_rdata_o_replicated(h) <= HDCU_PERF_CNT(h);
-                      if(rs1(instr_word_IE) /= 0) then
-                        HDCU_PERF_CNT(h) <= (HDCU_PERF_CNT(h) or csr_wdata_i);
-                      end if;
-                    when CSRRC|CSRRCI =>
-                      csr_rdata_o_replicated(h) <= HDCU_PERF_CNT(h);
-                      if(rs1(instr_word_IE) /= 0) then
-                        HDCU_PERF_CNT(h) <= (HDCU_PERF_CNT(h) and not(csr_wdata_i));
-                      end if;
-                    when others =>
-                      null;
-                  end case;
-                else
-                  csr_rdata_o_replicated(h) <= (others => '0');
-                end if;
-
-              when HDCU_BIND_addr =>
-                if (HDCU_PERF_EN = 1) then
-                  case csr_op_i is
-                    when CSRRW|CSRRWI =>
-                      csr_rdata_o_replicated(h) <= HDCU_BIND_CNT(h);
-                      HDCU_BIND_CNT(h)          <= csr_wdata_i;
-                    when CSRRS|CSRRSI =>
-                      csr_rdata_o_replicated(h) <= HDCU_BIND_CNT(h);
-                      if(rs1(instr_word_IE) /= 0) then
-                        HDCU_BIND_CNT(h) <= (HDCU_BIND_CNT(h) or csr_wdata_i);
-                      end if;
-                    when CSRRC|CSRRCI =>
-                      csr_rdata_o_replicated(h) <= HDCU_BIND_CNT(h);
-                      if(rs1(instr_word_IE) /= 0) then
-                        HDCU_BIND_CNT(h) <= (HDCU_BIND_CNT(h) and not(csr_wdata_i));
-                      end if;
-                    when others =>
-                      null;
-                  end case;
-                else
-                  csr_rdata_o_replicated(h) <= (others => '0');
-                end if;
-              
-              when HDCU_BUNDLE_addr =>
-                if (HDCU_PERF_EN = 1) then
-                  case csr_op_i is
-                    when CSRRW|CSRRWI =>
-                      csr_rdata_o_replicated(h) <= HDCU_BUNDL_CNT(h);
-                      HDCU_BUNDL_CNT(h)         <= csr_wdata_i;
-                    when CSRRS|CSRRSI =>
-                      csr_rdata_o_replicated(h) <= HDCU_BUNDL_CNT(h);
-                      if(rs1(instr_word_IE) /= 0) then
-                        HDCU_BUNDL_CNT(h) <= (HDCU_BUNDL_CNT(h) or csr_wdata_i);
-                      end if;
-                    when CSRRC|CSRRCI =>
-                      csr_rdata_o_replicated(h) <= HDCU_BUNDL_CNT(h);
-                      if(rs1(instr_word_IE) /= 0) then
-                        HDCU_BUNDL_CNT(h) <= (HDCU_BUNDL_CNT(h) and not(csr_wdata_i));
-                      end if;
-                    when others =>
-                      null;
-                  end case;
-                else
-                  csr_rdata_o_replicated(h) <= (others => '0');
-                end if;
-
-              when HDCU_SIM_addr =>
-                if (HDCU_PERF_EN = 1) then
-                  case csr_op_i is
-                    when CSRRW|CSRRWI =>
-                      csr_rdata_o_replicated(h) <= HDCU_SIM_CNT(h);
-                      HDCU_SIM_CNT(h)           <= csr_wdata_i;
-                    when CSRRS|CSRRSI =>
-                      csr_rdata_o_replicated(h) <= HDCU_SIM_CNT(h);
-                      if(rs1(instr_word_IE) /= 0) then
-                        HDCU_SIM_CNT(h) <= (HDCU_SIM_CNT(h) or csr_wdata_i);
-                      end if;
-                    when CSRRC|CSRRCI =>
-                      csr_rdata_o_replicated(h) <= HDCU_SIM_CNT(h);
-                      if(rs1(instr_word_IE) /= 0) then
-                        HDCU_SIM_CNT(h) <= (HDCU_SIM_CNT(h) and not(csr_wdata_i));
-                      end if;
-                    when others =>
-                      null;
-                  end case;
-                else
-                  csr_rdata_o_replicated(h) <= (others => '0');
-                end if;
-
-              when HDCU_CLIP_addr =>
-                if (HDCU_PERF_EN = 1) then
-                  case csr_op_i is
-                    when CSRRW|CSRRWI =>
-                      csr_rdata_o_replicated(h) <= HDCU_CLIP_CNT(h);
-                      HDCU_CLIP_CNT(h)          <= csr_wdata_i;
-                    when CSRRS|CSRRSI =>
-                      csr_rdata_o_replicated(h) <= HDCU_CLIP_CNT(h);
-                      if(rs1(instr_word_IE) /= 0) then
-                        HDCU_CLIP_CNT(h) <= (HDCU_CLIP_CNT(h) or csr_wdata_i);
-                      end if;
-                    when CSRRC|CSRRCI =>
-                      csr_rdata_o_replicated(h) <= HDCU_CLIP_CNT(h);
-                      if(rs1(instr_word_IE) /= 0) then
-                        HDCU_CLIP_CNT(h) <= (HDCU_CLIP_CNT(h) and not(csr_wdata_i));
-                      end if;
-                    when others =>
-                      null;
-                  end case;
-                else
-                  csr_rdata_o_replicated(h) <= (others => '0');
-                end if;
-
-              when HDCU_PERM_addr =>
-                if (HDCU_PERF_EN = 1) then
-                  case csr_op_i is
-                    when CSRRW|CSRRWI =>
-                      csr_rdata_o_replicated(h) <= HDCU_PERM_CNT(h);
-                      HDCU_PERM_CNT(h)          <= csr_wdata_i;
-                    when CSRRS|CSRRSI =>
-                      csr_rdata_o_replicated(h) <= HDCU_PERM_CNT(h);
-                      if(rs1(instr_word_IE) /= 0) then
-                        HDCU_PERM_CNT(h) <= (HDCU_PERM_CNT(h) or csr_wdata_i);
-                      end if;
-                    when CSRRC|CSRRCI =>
-                      csr_rdata_o_replicated(h) <= HDCU_PERM_CNT(h);
-                      if(rs1(instr_word_IE) /= 0) then
-                        HDCU_PERM_CNT(h) <= (HDCU_PERM_CNT(h) and not(csr_wdata_i));
-                      end if;
-                    when others =>
-                      null;
-                  end case;
-                else
-                  csr_rdata_o_replicated(h) <= (others => '0');
-                end if;
-
-              when HDCU_SEARCH_addr =>
-                if (HDCU_PERF_EN = 1) then
-                  case csr_op_i is
-                    when CSRRW|CSRRWI =>
-                      csr_rdata_o_replicated(h) <= HDCU_SRCH_CNT(h);
-                      HDCU_SRCH_CNT(h)        <= csr_wdata_i;
-                    when CSRRS|CSRRSI =>
-                      csr_rdata_o_replicated(h) <= HDCU_SRCH_CNT(h);
-                      if(rs1(instr_word_IE) /= 0) then
-                        HDCU_SRCH_CNT(h) <= (HDCU_SRCH_CNT(h) or csr_wdata_i);
-                      end if;
-                    when CSRRC|CSRRCI =>
-                      csr_rdata_o_replicated(h) <= HDCU_SRCH_CNT(h);
-                      if(rs1(instr_word_IE) /= 0) then
-                        HDCU_SRCH_CNT(h) <= (HDCU_SRCH_CNT(h) and not(csr_wdata_i));
-                      end if;
-                    when others =>
-                      null;
-                  end case;
-                else
-                  csr_rdata_o_replicated(h) <= (others => '0');
-                end if;
-              ------------------------------------------------------------------
-
               when MCYCLEH_addr =>
                 if (MCYCLE_EN = 1) then
                   case csr_op_i is
@@ -1236,6 +1009,168 @@ begin
                   csr_rdata_o_replicated(h) <= (others => '0');
                 end if;
 
+              when HDCU_MCYCLE_addr =>
+                if (accl_en = 1 and MHPMCOUNTER_EN = 1) then
+                  case csr_op_i is
+                    when CSRRC|CSRRS|CSRRCI|CSRRSI =>
+                      if(rs1(instr_word_IE) = 0) then
+                        csr_rdata_o_replicated(h) <= std_logic_vector(unsigned(hdcu_performance_counter(h)) + unsigned(MCYCLE(h)));
+                      else
+                        csr_access_denied_o_replicated(h) <= '1';
+                      end if;
+                    when CSRRW|CSRRWI =>
+                      csr_access_denied_o_replicated(h) <= '1';
+                    when others =>
+                      null;
+                  end case;
+                else
+                  csr_rdata_o_replicated(h) <= (others => '0');
+                end if;
+
+              when HDCU_CYCLES_addr =>
+                if (accl_en = 1 and MHPMCOUNTER_EN = 1) then
+                  case csr_op_i is
+                    when CSRRC|CSRRS|CSRRCI|CSRRSI =>
+                      if(rs1(instr_word_IE) = 0) then
+                        csr_rdata_o_replicated(h) <= hdcu_performance_counter(h);
+                      else
+                        csr_access_denied_o_replicated(h) <= '1';
+                      end if;
+                    when CSRRW|CSRRWI =>
+                      csr_access_denied_o_replicated(h) <= '1';
+                    when others =>
+                      null;
+                  end case;
+                else
+                  csr_rdata_o_replicated(h) <= (others => '0');
+                end if;
+
+              when HDCU_BIND_addr =>
+                if (accl_en = 1 and MHPMCOUNTER_EN = 1) then
+                  case csr_op_i is
+                    when CSRRC|CSRRS|CSRRCI|CSRRSI =>
+                      if(rs1(instr_word_IE) = 0) then
+                        csr_rdata_o_replicated(h) <= hdcu_bind_perf_counter(h);
+                      else
+                        csr_access_denied_o_replicated(h) <= '1';
+                      end if;
+                    when CSRRW|CSRRWI =>
+                      csr_access_denied_o_replicated(h) <= '1';
+                    when others =>
+                      null;
+                  end case;
+                else
+                  csr_rdata_o_replicated(h) <= (others => '0');
+                end if;
+
+              when HDCU_BUNDLE_addr =>
+                if (accl_en = 1 and MHPMCOUNTER_EN = 1) then
+                  case csr_op_i is
+                    when CSRRC|CSRRS|CSRRCI|CSRRSI =>
+                      if(rs1(instr_word_IE) = 0) then
+                        csr_rdata_o_replicated(h) <= hdcu_bundle_perf_counter(h);
+                      else
+                        csr_access_denied_o_replicated(h) <= '1';
+                      end if;
+                    when CSRRW|CSRRWI =>
+                      csr_access_denied_o_replicated(h) <= '1';
+                    when others =>
+                      null;
+                  end case;
+                else
+                  csr_rdata_o_replicated(h) <= (others => '0');
+                end if;
+
+              when HDCU_SIM_addr =>
+                if (accl_en = 1 and MHPMCOUNTER_EN = 1) then
+                  case csr_op_i is
+                    when CSRRC|CSRRS|CSRRCI|CSRRSI =>
+                      if(rs1(instr_word_IE) = 0) then
+                        csr_rdata_o_replicated(h) <= hdcu_sim_perf_counter(h);
+                      else
+                        csr_access_denied_o_replicated(h) <= '1';
+                      end if;
+                    when CSRRW|CSRRWI =>
+                      csr_access_denied_o_replicated(h) <= '1';
+                    when others =>
+                      null;
+                  end case;
+                else
+                  csr_rdata_o_replicated(h) <= (others => '0');
+                end if;
+
+              when HDCU_CLIP_addr =>
+                if (accl_en = 1 and MHPMCOUNTER_EN = 1) then
+                  case csr_op_i is
+                    when CSRRC|CSRRS|CSRRCI|CSRRSI =>
+                      if(rs1(instr_word_IE) = 0) then
+                        csr_rdata_o_replicated(h) <= hdcu_clip_perf_counter(h);
+                      else
+                        csr_access_denied_o_replicated(h) <= '1';
+                      end if;
+                    when CSRRW|CSRRWI =>
+                      csr_access_denied_o_replicated(h) <= '1';
+                    when others =>
+                      null;
+                  end case;
+                else
+                  csr_rdata_o_replicated(h) <= (others => '0');
+                end if;
+
+              when HDCU_PERM_addr =>
+                if (accl_en = 1 and MHPMCOUNTER_EN = 1) then
+                  case csr_op_i is
+                    when CSRRC|CSRRS|CSRRCI|CSRRSI =>
+                      if(rs1(instr_word_IE) = 0) then
+                        csr_rdata_o_replicated(h) <= hdcu_perm_perf_counter(h);
+                      else
+                        csr_access_denied_o_replicated(h) <= '1';
+                      end if;
+                    when CSRRW|CSRRWI =>
+                      csr_access_denied_o_replicated(h) <= '1';
+                    when others =>
+                      null;
+                  end case;
+                else
+                  csr_rdata_o_replicated(h) <= (others => '0');
+                end if;
+
+              when HDCU_SEARCH_addr =>
+                if (accl_en = 1 and MHPMCOUNTER_EN = 1) then
+                  case csr_op_i is
+                    when CSRRC|CSRRS|CSRRCI|CSRRSI =>
+                      if(rs1(instr_word_IE) = 0) then
+                        csr_rdata_o_replicated(h) <= (others => '0');
+                      else
+                        csr_access_denied_o_replicated(h) <= '1';
+                      end if;
+                    when CSRRW|CSRRWI =>
+                      csr_access_denied_o_replicated(h) <= '1';
+                    when others =>
+                      null;
+                  end case;
+                else
+                  csr_rdata_o_replicated(h) <= (others => '0');
+                end if;
+
+              when HDCU_ENC_addr =>
+                if (accl_en = 1 and MHPMCOUNTER_EN = 1) then
+                  case csr_op_i is
+                    when CSRRC|CSRRS|CSRRCI|CSRRSI =>
+                      if(rs1(instr_word_IE) = 0) then
+                        csr_rdata_o_replicated(h) <= hdcu_enc_perf_counter(h);
+                      else
+                        csr_access_denied_o_replicated(h) <= '1';
+                      end if;
+                    when CSRRW|CSRRWI =>
+                      csr_access_denied_o_replicated(h) <= '1';
+                    when others =>
+                      null;
+                  end case;
+                else
+                  csr_rdata_o_replicated(h) <= (others => '0');
+                end if;
+
               when PCER_addr =>
                 if (MHPMCOUNTER_EN = 1 or MCYCLE_EN = 1 or MINSTRET_EN = 1) then
                   case csr_op_i is
@@ -1471,12 +1406,7 @@ begin
                   MCYCLEH(h) <= std_logic_vector(unsigned(MCYCLEH(h))+1);
                   MCYCLE(h)  <= x"00000000";
                 else
---                  MCYCLE(h) <= std_logic_vector(unsigned(MCYCLE(h))+1);
-                  if busy_hdc(0) = '1' then
-                    MCYCLE(h) <= std_logic_vector(unsigned(MCYCLE(h))); --if HDC is busy, we suspend counting
-                  else
-                    MCYCLE(h) <= std_logic_vector(unsigned(MCYCLE(h))+1);
-                  end if;
+                  MCYCLE(h) <= std_logic_vector(unsigned(MCYCLE(h))+1);
                 end if;
               end if;
             end if;
@@ -1505,7 +1435,7 @@ begin
             end if;
           end if;
 
-          if (PCER(h)(2) = '1') then    --load/store access stall
+          if (PCER(h)(2) = '1') then -- load/store access stall
             if (MHPMCOUNTER_EN = 1) then
               if (data_req_o = '1' and data_gnt_i = '0') then
                 MHPMCOUNTER3(h) <= std_logic_vector(unsigned(MHPMCOUNTER3(h))+1);
@@ -1513,7 +1443,7 @@ begin
             end if;
           end if;
 
-          if(PCER(h)(5) = '1') then     --load access 
+          if(PCER(h)(5) = '1') then -- load access 
             if (MHPMCOUNTER_EN = 1) then
               if harc_EXEC = h or count_all = 1 then -- count_all is bypass and enables counting regardless of the hart executing
                 if (data_req_o = '1' and data_gnt_i = '1' and data_we_o = '0') then
@@ -1523,7 +1453,7 @@ begin
             end if;
           end if;
 
-          if(PCER(h)(6) = '1') then     --store access 
+          if(PCER(h)(6) = '1') then -- store access 
             if (MHPMCOUNTER_EN = 1) then
               if harc_EXEC = h or count_all = 1 then  -- count_all is bypass and enables counting regardless of the hart executing
                 if (data_req_o = '1' and data_gnt_i = '1' and data_we_o = '1') then
@@ -1533,7 +1463,7 @@ begin
             end if;
           end if;
 
-          if(PCER(h)(7) = '1') then     --jump 
+          if(PCER(h)(7) = '1') then -- jump 
             if (MHPMCOUNTER_EN = 1) then
               if harc_EXEC = h or count_all = 1 then -- count_all is bypass and enables counting regardless of the hart executing
                 if (jump_instr = '1') then
@@ -1543,7 +1473,7 @@ begin
             end if;
           end if;
 
-          if(PCER(h)(8) = '1') then     --branch 
+          if(PCER(h)(8) = '1') then -- branch 
             if (MHPMCOUNTER_EN = 1) then
               if harc_EXEC = h or count_all = 1 then -- count_all is bypass and enables counting regardless of the hart executing
                 if (branch_instr = '1') then
@@ -1553,7 +1483,7 @@ begin
             end if;
           end if;
 
-          if(PCER(h)(9) = '1') then     --btaken
+          if(PCER(h)(9) = '1') then --btaken
             if (MHPMCOUNTER_EN = 1) then
               if harc_EXEC = h or count_all = 1 then -- count_all is bypass and enables counting regardless of the hart executing
                 if (branch_instr = '1' and set_branch_condition = '1') then

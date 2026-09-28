@@ -10,7 +10,7 @@ WORKSPACE_ROOT="$(cd "${REPO_ROOT}/.." && pwd)"
 
 BUILD_ROOT="${SW_DIR}/build_fhrr_campaign"
 LOG_ROOT=""
-TRACKER_FILE="${WORKSPACE_ROOT}/Tracker_Aggiornamenti.txt"
+TRACKER_FILE=""
 TIMEOUT_SEC=300
 JOBS=1
 FIXED_SEED=305419896
@@ -25,6 +25,7 @@ TESTS=(
   "fhrr_similarity_test"
   "fhrr_clip_test"
   "fhrr_encode_test"
+  "fhrr_permute_test"
 )
 
 usage() {
@@ -34,7 +35,7 @@ Usage: run-fhrr-simd-hv-campaign.sh [options]
 Options:
   --build-root PATH     Root for per-configuration builds. Default: sw/build_fhrr_campaign
   --log-root PATH       Root for campaign logs. Default: BUILD_ROOT/logs
-  --tracker PATH        Tracker file to append. Default: ../Tracker_Aggiornamenti.txt
+  --tracker PATH        Optional log file to which the summary is also appended.
   --timeout SEC         Timeout for each simulation. Default: 300
   --jobs N              Make parallelism for ELF builds. Default: 1
   --fixed-seed N        FHRR_TEST_FIXED_SEED. Default: 305419896
@@ -121,6 +122,7 @@ declare -A OP_BY_TEST=(
   ["fhrr_similarity_test"]="similarity"
   ["fhrr_clip_test"]="clip"
   ["fhrr_encode_test"]="encode"
+  ["fhrr_permute_test"]="permute"
 )
 
 declare -a SUMMARY_ROWS=()
@@ -290,7 +292,8 @@ build_elfs() {
       fhrr_bundle_test.elf \
       fhrr_similarity_test.elf \
       fhrr_clip_test.elf \
-      fhrr_encode_test.elf
+      fhrr_encode_test.elf \
+      fhrr_permute_test.elf
   ) >"${log_file}" 2>&1
 }
 
@@ -313,7 +316,6 @@ run_test() {
 }
 
 echo "FHRR SIMD/HV campaign logs: ${CAMPAIGN_LOG_DIR}"
-echo "Tracker: ${TRACKER_FILE}"
 echo "SIMD values: ${SIMD_VALUES[*]}"
 echo "HV elements: ${HV_VALUES[*]}"
 
@@ -403,9 +405,9 @@ repo_status="$(git_field status)"
 
 {
   echo
-  echo "[${RUN_STAMP}] - Campagna FHRR SIMD/HV"
+  echo "[${RUN_STAMP}] - FHRR SIMD/HV campaign"
   echo
-  echo "  Configurazione"
+  echo "  Configuration"
   echo "    - SIMD: ${SIMD_VALUES[*]}"
   echo "    - HV elements: ${HV_VALUES[*]}"
   echo "    - KLESS_accl_sel=1, KLESS_Addr_Width=16"
@@ -414,15 +416,17 @@ repo_status="$(git_field status)"
   echo "    - Log root: ${CAMPAIGN_LOG_DIR}"
   echo "    - RTL compile log: ${RTL_COMPILE_LOG:-n/a}"
   echo
-  echo "  Risultati"
+  echo "  Results"
   echo
   echo "| SIMD | HV elements | Test | Op | Status | SW cycles | HW cycles | HW accel cycles | Speedup SW/HW | Log |"
   echo "|---:|---:|---|---|---|---:|---:|---:|---:|---|"
   printf '%s\n' "${SUMMARY_ROWS[@]}"
 } >"${SUMMARY_FILE}"
 
-cat "${SUMMARY_FILE}" >>"${TRACKER_FILE}"
+if [[ -n "${TRACKER_FILE}" ]]; then
+  cat "${SUMMARY_FILE}" >>"${TRACKER_FILE}"
+  echo "Summary also appended to ${TRACKER_FILE}"
+fi
 
 echo
 echo "Summary written to ${SUMMARY_FILE}"
-echo "Tracker updated: ${TRACKER_FILE}"

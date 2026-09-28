@@ -20,7 +20,7 @@ use std.textio.all;
 
 -- local packages ------------
 use work.riscv_klessydra.all;
-
+--use work.klessydra_parameters.all;
 
 -- pipeline  pinout --------------------
 entity IE_STAGE is
@@ -34,6 +34,7 @@ entity IE_STAGE is
     RV32M                     : natural;
     HET_CLUSTER_S1_CORE       : natural;
     TPS_CEIL                  : natural;
+    --TPS_GLBL_CEIL           : natural;
     RF_CEIL                   : natural
   );
   port (
@@ -68,7 +69,6 @@ entity IE_STAGE is
     pass_BGE                  : in  std_logic;
     pass_BGEU                 : in  std_logic;
     ie_instr_req              : in  std_logic;
-    dbg_req_o                 : in std_logic;
     MHARTID                   : in  array_2d(THREAD_POOL_SIZE-1 downto 0)(9  downto 0);
     MSTATUS                   : in  array_2D(THREAD_POOL_SIZE-1 downto 0)(1 downto 0);
     MPIP                      : in  array_2d(THREAD_POOL_SIZE-1 downto 0)(THREAD_POOL_SIZE_GLOBAL-1 downto 0);
@@ -95,7 +95,6 @@ entity IE_STAGE is
     jump_instr_lat            : out std_logic;
     WFI_Instr                 : out std_logic;
     sleep_state               : out std_logic;
-    reset_state               : out std_logic;
     set_branch_condition      : out std_logic;
     IE_except_condition       : out std_logic;
     set_mret_condition        : out std_logic;
@@ -266,27 +265,9 @@ architecture EXECUTE of IE_STAGE is
     return h;
   end function add_vect_bits;
 
-
-  --CUSTOM CHANGES FOR SIMULATION
-  -- This function checks if the convertion from std_logic_vector to integer makes out of bounds errors 
-  function to_integer_bounded(v: std_logic_vector; bound: integer) return integer is
-    variable result: integer;
-  begin
-
-    if to_integer(unsigned(v)) > bound then
---      result := bound;
-      result := 0;
-    else
-      result := to_integer(unsigned(v));
-    end if;  
-
-    return result;
-  end function to_integer_bounded;
-
-
 begin
 
-divider_inst : divider
+  divider_inst : divider
     generic map(
       divider_implementation => 5,
       size                   => 32
@@ -365,10 +346,6 @@ divider_inst : divider
 
       case state_IE is  -- stage state
         when sleep =>
-          null;
-        when reset =>
-          null;
-        when debug =>
           null;
         when normal =>
           -- check if there is a valid instruction and the thread it belongs to is not in a delay slot: 
@@ -546,15 +523,6 @@ divider_inst : divider
                 end if;
               end if;
 
-              if decoded_instruction_IE(DIVU_bit_position) = '1' or
-                 decoded_instruction_IE(DIV_bit_position)  = '1' or
-                 decoded_instruction_IE(REMU_bit_position) = '1' or
-                 decoded_instruction_IE(REM_bit_position)  = '1' then
-                if div_count_wire(5) = '1' or div_bypass_en = '1' then
-                  WB_EN_next_IE <= '1';
-                end if;
-              end if;
-
 
               if decoded_instruction_IE(DIVU_bit_position) = '1' then
                 if zero_rs2 = '1' then
@@ -562,7 +530,7 @@ divider_inst : divider
                 elsif zero_rs1 = '1' then
                   IE_WB <= (others => '0');
                 elsif pass_BEQ then
-                  IE_WB <= (31 downto 1 => '0') & '1';
+                  IE_WB <= std_logic_vector(to_unsigned(1, IE_WB'length));
                 elsif pass_BLTU then
                   IE_WB <= (others => '0');
                 else
@@ -579,7 +547,7 @@ divider_inst : divider
               --    IE_WB <= (others => '0');
                 elsif pass_BEQ then
                   if RS2_DATA_IE(31) = RS1_DATA_IE(31) then
-                    IE_WB <= (31 downto 1 => '0') & '1';
+                    IE_WB <= std_logic_vector(to_unsigned(1, IE_WB'length));
                   else
                     IE_WB <= (31 downto 0 => '1');
                   end if;
@@ -671,7 +639,6 @@ divider_inst : divider
     variable jump_instr_wires                 : std_logic;
     variable branch_instr_wires               : std_logic;
     variable ebreak_instr_wires               : std_logic;
-    variable dbg_ack_i_wires                  : std_logic;
     variable WFI_Instr_wires                  : std_logic;
     variable served_irq_wires                 : std_logic_vector(harc_range);
     variable nextstate_IE_wires               : fsm_IE_states;
@@ -699,9 +666,7 @@ divider_inst : divider
     jump_instr_wires                 := '0';
     branch_instr_wires               := '0';
     ebreak_instr_wires               := '0';
-    dbg_ack_i_wires                  := '0';
     WFI_Instr_wires                  := '0';
-    reset_state                      <= '0';
     sleep_state                      <= '0';
     ie_csr_wdata_i                   <= RS1_Data_IE;
     csr_instr_req                    <= '0';
@@ -712,8 +677,7 @@ divider_inst : divider
     halt_update_IE_wire              <= halt_update_IE_pending and not instr_gnt_i; -- latch the halt wire as long as we don't have a valid instr
     branch_taken                     <= '0';
     branch_hit                       <= branch_instr;
---    source_hartid_o                  <= to_integer(unsigned(MHARTID(harc_EXEC)(THREAD_POOL_SIZE_GLOBAL-1 downto 0))); -- AAA change the to TPS_CEIL or TPS_GLBL_CEIL
-    source_hartid_o                  <= to_integer_bounded(MHARTID(harc_EXEC)(THREAD_POOL_SIZE_GLOBAL-1 downto 0),  THREAD_POOL_SIZE_GLOBAL-1  ); -- AAA change the to TPS_CEIL or TPS_GLBL_CEIL
+    source_hartid_o                  <= to_integer(unsigned(MHARTID(harc_EXEC)(THREAD_POOL_SIZE_GLOBAL-1 downto 0))); -- AAA change the to TPS_CEIL or TPS_GLBL_CEIL
 
     if RV32M = 1 then
       MUL_WB_EN_wire                 <= WB_EN_next_ID and decoded_instruction_IE(MUL_bit_position) and not served_irq_wires(harc_EXEC);
@@ -757,17 +721,6 @@ divider_inst : divider
             halt_update_IE_wire(harc_EXEC) <= '1';  -- maintain the halt from the mret
           end if;
         end if;
-        if dbg_req_o = '1' then
-          dbg_ack_i_wires    := '1';
-          core_busy_IE_wires := '1';
-          nextstate_IE_wires := sleep;
-          sleep_state  <= '1';
-        elsif irq_i = '1' or fetch_enable_i = '1' then
-          nextstate_IE_wires := normal;
-        else
-          core_busy_IE_wires := '1';
-          nextstate_IE_wires := sleep;
-        end if;
         if irq_i = '1' or irq_pending(harc_EXEC) = '1' then
           flush_hart_int_wire(harc_EXEC) <= '1';
           nextstate_IE_wires             := normal;
@@ -779,27 +732,6 @@ divider_inst : divider
         else
           core_busy_IE_wires := '1';
           nextstate_IE_wires := sleep;
-        end if;
-       when reset =>
-        reset_state <= '1';
-        if dbg_req_o = '1' then
-          dbg_ack_i_wires    := '1';
-          core_busy_IE_wires      := '1';
-          nextstate_IE_wires := reset;
-        elsif fetch_enable_i = '0' then
-          nextstate_IE_wires := reset;
-          core_busy_IE_wires      := '1';
-        else
-          nextstate_IE_wires := normal;
-        end if;
-
-       when debug =>
-        dbg_ack_i_wires := '1';
-        if dbg_req_o = '0' then
-          nextstate_IE_wires := normal;
-        else
-          nextstate_IE_wires := debug;
-          core_busy_IE_wires := '1';
         end if;
 
       when normal =>
@@ -1083,10 +1015,8 @@ divider_inst : divider
                 when init =>
                   if RS1_Data_IE(31) = '0' or signed_op = '0' then
                     RS1_Data_IE_int_wire <= RS1_Data_IE;
-                    --res_wire <= (31 downto 0 => '0') & RS1_Data_IE;
                   else
                     RS1_Data_IE_int_wire <= std_logic_vector(signed(not(RS1_Data_IE)) + 1);
-                    --res_wire <= (31 downto 0 => '0') & RS1_Data_IE_int_wire;
                   end if;
                   if RS2_Data_IE(31) = '0' or signed_op = '0' then
                     RS2_Data_IE_int_wire <= RS2_Data_IE;
@@ -1112,13 +1042,8 @@ divider_inst : divider
               end case; 
             end if;
 
-         end if; -- END RV32M
+          end if; -- END RV32M
 
-        if dbg_req_o = '1' then
-            nextstate_IE_wires := debug;
-            dbg_ack_i_wires    := '1';
-            core_busy_IE_wires := '1';
-          end if;
         -- EXECUTE OF INSTRUCTION (END)
         end if;  -- instr_rvalid_IE values 
 

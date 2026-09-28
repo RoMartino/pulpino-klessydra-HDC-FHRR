@@ -91,10 +91,10 @@ entity Load_Store_Unit is
     ls_sc_write_addr           : out std_logic_vector(Addr_Width-(SIMD_BITS+3)downto 0);
     ls_sc_data_write_wire      : out std_logic_vector(Data_Width-1 downto 0);
     -- WB_Stage Signals
+    instr_word_LS_WB           : out std_logic_vector(31 downto 0);
+    harc_LS_WB                 : out natural range THREAD_POOL_SIZE-1 downto 0;
     LS_WB_EN                   : out std_logic;
     LS_WB_EN_wire              : out std_logic;
-    harc_LS_WB                 : out natural range THREAD_POOL_SIZE-1 downto 0;
-    instr_word_LS_WB           : out std_logic_vector(31 downto 0);
     LS_WB                      : out std_logic_vector(31 downto 0);
     FP_LS_WB_EN                : out std_logic;
     FP_LS_WB_EN_wire           : out std_logic;
@@ -175,7 +175,7 @@ begin
 	    amo_store_lat  <= '0';
 	    LS_WB_EN <= '0';
 	    busy_LS_lat <= '0';
-	    LS_WB <= (others => '0');
+	    LS_WB <= (others => '0'); -- AAA maybe remove this reset state, and see what happens
       harc_LS_WB <= THREAD_POOL_SIZE-1;
       misaligned_err <= '0';
       instr_word_LS_WB <= (others => '0');
@@ -243,7 +243,7 @@ begin
               if ((data_addr_internal(1 downto 0) = "00" and data_width_ID = "10") or 
                   (data_addr_internal(0)          = '0'  and data_width_ID = "01") or
                                                              data_width_ID = "00") then
-                RS2_Data_IE_lat <= RS2_Data_IE;	
+                RS2_Data_IE_lat <= RS2_Data_IE;
                 if (store_err = '1') then
                   ls_except_data <= STORE_ERROR_EXCEPT_CODE;
                 end if;
@@ -269,8 +269,8 @@ begin
           ------------------------------------------------------------------------------------------------------
 
             if accl_en = 1 then
-              if decoded_instruction_LS(HVMEMLD_bit_position)   = '1' or
-                 decoded_instruction_LS(HVBCASTLD_bit_position) = '1' then
+              if decoded_instruction_LS(KMEMLD_bit_position)   = '1' or
+                 decoded_instruction_LS(KBCASTLD_bit_position) = '1' then
                 overflow_rd_sc <= add_out(Addr_Width downto 0); -- If storing data to SC overflows it's address space
                 -- Illegal byte transfer handler, and illegal writeback address handler
                 if unsigned(rd_to_sc) = SPM_NUM then  -- Not a scratchpad destination address
@@ -288,7 +288,7 @@ begin
                 end if;
               end if;
 
-              if decoded_instruction_LS(HVMEMSTR_bit_position) = '1' then
+              if decoded_instruction_LS(KMEMSTR_bit_position) = '1' then
                 overflow_rs1_sc <= add_out(Addr_Width downto 0); -- If loading data from SC overflows it's address space
                 -- Illegal byte transfer handler, and illegal writeback address handler
                 if unsigned(rs1_to_sc) = SPM_NUM then --  Not a scratchpad source address
@@ -325,18 +325,18 @@ begin
             end if;	
 
             if accl_en = 1 then
-              if decoded_instruction_LS(HVMEMLD_bit_position) = '1' or decoded_instruction_LS(HVBCASTLD_bit_position) = '1' then
+              if decoded_instruction_LS(KMEMLD_bit_position) = '1' or decoded_instruction_LS(KBCASTLD_bit_position) = '1' then
                 if overflow_rd_sc(Addr_Width) = '1' then
                   ls_except_data              <= SCRATCHPAD_OVERFLOW_EXCEPT_CODE;
                 end if;
               end if;
 
-              if decoded_instruction_LS(HVMEMSTR_bit_position) = '1' then
+              if decoded_instruction_LS(KMEMSTR_bit_position) = '1' then
                 if overflow_rs1_sc(Addr_Width) = '1' then
                   ls_except_data              <= SCRATCHPAD_OVERFLOW_EXCEPT_CODE;     
                 end if;
               end if;
-            end if;
+            end if; -- accl_en
 
             if decoded_instruction_LS(LW_bit_position) = '1'  or (decoded_instruction_LS(AMOSWAP_bit_position) = '1' and amo_store_lat = '0' and amo_load_skip = '0') then
               if data_rvalid_i = '1' then
@@ -405,7 +405,7 @@ begin
               end if;
             end if;
 
-    if RV32F = 1 then
+            if RV32F = 1 then
               if decoded_instruction_LS(FLW_bit_position) = '1' then
                 if data_rvalid_i = '1' then   
                   FP_LS_WB <= data_rdata_i;
@@ -418,7 +418,7 @@ begin
     end if;
   end process;
 
-  spm_bcast <= '1' when  decoded_instruction_LS(HVBCASTLD_bit_position) = '1' else '0';
+  spm_bcast <= '1' when  decoded_instruction_LS(KBCASTLD_bit_position) = '1' else '0';
 
 
 -------------------------------------------------------------------------
@@ -445,7 +445,7 @@ begin
   begin
     data_addr_internal_wires         := std_logic_vector(signed(RS1_Data_IE));  -- The reset value was non-zero in order to keep the switching activity minimal
     nextstate_LS                     <= normal;
-    LS_WB_EN_wire                    <= LS_WB_EN;
+    LS_WB_EN_wire                    <= LS_WB_EN;    -- AAA this signal is superceded by the successive assignments that default the signal value back to zero
     FP_LS_WB_EN_wire                 <= FP_LS_WB_EN; -- AAA this signal is superceded by the successive assignments that default the signal value back to zero
     data_be_internal_wires           := (others => '0');
     data_wdata_o_wires               := (others => '0');
@@ -473,10 +473,10 @@ begin
     end if;
 
     if ls_instr_req = '0' and busy_LS_lat = '0' then
-      LS_WB_EN_wire <= '0';
+      LS_WB_EN_wire     <= '0';
       FP_LS_WB_EN_wire  <= '0';
     elsif LS_instr_req = '1' or busy_LS_lat = '1' then
-      LS_WB_EN_wire <= '0';
+      LS_WB_EN_wire     <= '0';
       FP_LS_WB_EN_wire  <= '0';
       case state_LS is
         when normal =>
@@ -559,6 +559,7 @@ begin
             end if;
             if data_width_ID = "01" then  -- store half word
               case data_addr_internal_wires(1) is
+                -- AAA maybe just assign 16 bits and the rest will default to 0 
                 when '0' =>
                   data_wdata_o_wires := RS2_Data_IE(31 downto 0);
                   data_we_o_wires        := '1';  -- is a writing
@@ -573,7 +574,8 @@ begin
             end if;
             if data_width_ID = "00" then  -- store byte
               case data_addr_internal_wires(1 downto 0) is
-                when "00" =>
+                -- AAA maybe just assign 8 bits and the rest will default to 0 
+                when "00" => 
                   data_wdata_o_wires := RS2_Data_IE(31 downto 0);
                   data_we_o_wires        := '1';  -- is a writing
                   data_be_internal_wires := data_be_ID;
@@ -605,8 +607,8 @@ begin
           ------------------------------------------------------------------------------------------------------
 
             if accl_en = 1 then
-              if decoded_instruction_LS(HVMEMLD_bit_position)   = '1' or
-                 decoded_instruction_LS(HVBCASTLD_bit_position) = '1' then
+              if decoded_instruction_LS(KMEMLD_bit_position)   = '1' or
+                 decoded_instruction_LS(KBCASTLD_bit_position) = '1' then
                 -- RS2_Data_IE(Addr_Width downto 0) instead of RS2_Data_IE(Addr_Width -1 downto 0) in order to allow reading sizes = MAX_SC_SIZE and not MAX_SC_SIZE - 1 
                 if unsigned(rd_to_sc) = SPM_NUM then -- AAA change this to support more than 4 spms
                   ls_except_condition_wires  := '1';
@@ -632,7 +634,7 @@ begin
                 end if;
               end if;
 
-            if decoded_instruction_LS(HVMEMSTR_bit_position) = '1' then
+            if decoded_instruction_LS(KMEMSTR_bit_position) = '1' then
               -- RS2_Data_IE(Addr_Width downto 0) instead of RS2_Data_IE(Addr_Width -1 downto 0) in order to allow reading sizes = MAX_SC_SIZE and not MAX_SC_SIZE - 1 
               if unsigned(rs1_to_sc) = SPM_NUM then
                 ls_except_condition_wires  := '1';
@@ -710,8 +712,8 @@ begin
          --   halt_lsu <= '1';
          -- end if;
 
-          if decoded_instruction_LS(HVMEMLD_bit_position)   = '1' or
-             decoded_instruction_LS(HVBCASTLD_bit_position) = '1' then
+          if decoded_instruction_LS(KMEMLD_bit_position)   = '1' or
+             decoded_instruction_LS(KBCASTLD_bit_position) = '1' then
             if accl_en = 1 then   
               if data_rvalid_i = '1' then
                 RS1_Data_IE_wire_lat <= std_logic_vector(unsigned(RS1_Data_IE_lat) + "100");
@@ -719,7 +721,7 @@ begin
                 if unsigned(RS2_Data_IE_lat(Addr_Width downto 0)) > 4 then --decrement by four bytes
                   RS2_Data_IE_wire_lat <= std_logic_vector(unsigned(RS2_Data_IE_lat) - "100");
                 else -- else set the MSB to '1' indicating that no bytes are left
-                  RS2_Data_IE_wire_lat(Addr_Width+1) <= '1'; -- singaling that hvmemstr is done
+                  RS2_Data_IE_wire_lat(Addr_Width+1) <= '1'; -- singaling that kmemstr is done
                   RS2_Data_IE_wire_lat(2 downto 0)   <= (others => '0');
                 end if;
               end if;
@@ -751,7 +753,7 @@ begin
               end if;
             end if;
 
-          elsif decoded_instruction_LS(HVMEMSTR_bit_position) = '1' then
+          elsif decoded_instruction_LS(KMEMSTR_bit_position) = '1' then
             if accl_en = 1 then
               if data_rvalid_i = '1' then
                 RS1_Data_IE_wire_lat <= std_logic_vector(unsigned(RS1_Data_IE_lat) + "100");
@@ -759,14 +761,14 @@ begin
                 if unsigned(RS2_Data_IE_lat(Addr_Width downto 0)) > 4 then
                   RS2_Data_IE_wire_lat <= std_logic_vector(unsigned(RS2_Data_IE_lat) - "100");
                 else
-                  RS2_Data_IE_wire_lat(Addr_Width+1) <= '1'; -- singaling that hvmemstr is done
+                  RS2_Data_IE_wire_lat(Addr_Width+1) <= '1'; -- singaling that kmemstr is done
                   RS2_Data_IE_wire_lat(2 downto 0)   <= (others => '0');
                 end if;
               end if;
               if overflow_rs1_sc(Addr_Width) = '1' then
                 ls_except_condition_wires  := '1';
                 ls_taken_branch_wires      := '1';
-              elsif RS2_Data_IE_lat(Addr_Width+1) = '0' then -- if that bit "Addr_Width+1" is high, then hvmemstr is done
+              elsif RS2_Data_IE_lat(Addr_Width+1) = '0' then -- if that bit "Addr_Width+1" is high, then kmemstr is done
                 busy_LS_wires      := '1';
                 nextstate_LS <= data_valid_waiting;
                 ls_sc_read_addr <= RS1_Data_IE_wire_lat(Addr_Width - 1 downto SIMD_BITS+2);
@@ -778,7 +780,7 @@ begin
                   data_addr_internal_wires := RD_Data_IE_lat;
                   data_wdata_o_wires := ls_sc_data_read_wire;
                 end if;
-                -- Increments the address of the SC memory every four words for HVMEMSTR
+                -- Increments the address of the SC memory every four words for KMEMSTR
                 if data_rvalid_i = '1' then
                   ls_sci_req(to_integer(unsigned(ls_rs1_to_sc))) <= '1';
                   if sc_word_count = SIMD-1 then
@@ -789,7 +791,7 @@ begin
                 end if;
               end if;
             end if;
-	  
+
           elsif data_rvalid_i = '1' then
             if store_op = '1' or amo_store_lat = '1' or amo_load_skip = '1' then -- SW or AMOSWAP data writing
               if decoded_instruction_LS(SW_bit_position) = '1' then  -- SW data writing
@@ -848,7 +850,7 @@ begin
             if decoded_instruction_LS(FSW_bit_position) = '0' and decoded_instruction_LS(SW_bit_position) = '0' and  decoded_instruction_LS(SH_bit_position) = '0' and decoded_instruction_LS(SB_bit_position)  = '0' then
               core_busy_LS_wires := '1';
             end if;
-		  end if;
+		      end if;
 
       end case;
     end if;
@@ -932,12 +934,12 @@ begin
       add_op_B <= S_immediate(instr_word_IE);
     end if;
     if accl_en = 1 then
-      if decoded_instruction_LS(HVMEMLD_bit_position)   = '1' or  -- calculates overflow spm write
-         decoded_instruction_LS(HVBCASTLD_bit_position) = '1' then
+      if decoded_instruction_LS(KMEMLD_bit_position)   = '1' or  -- calculates overflow spm write
+         decoded_instruction_LS(KBCASTLD_bit_position) = '1' then
         add_op_A <= (Addr_Width to 31 => '0') & RD_data_IE(Addr_Width -1 downto 0);
         add_op_B <= (Addr_Width to 31 => '0') & std_logic_vector(unsigned(RS2_data_IE(Addr_Width -1 downto 0))-1);
       end if;
-      if decoded_instruction_LS(HVMEMSTR_bit_position) = '1' then -- calculates overflow spm read
+      if decoded_instruction_LS(KMEMSTR_bit_position) = '1' then -- calculates overflow spm read
         add_op_A <= (Addr_Width to 31 => '0') & RS1_data_IE(Addr_Width -1 downto 0);
         add_op_B <= (Addr_Width to 31 => '0') & std_logic_vector(unsigned(RS2_data_IE(Addr_Width -1 downto 0))-1);
       end if;

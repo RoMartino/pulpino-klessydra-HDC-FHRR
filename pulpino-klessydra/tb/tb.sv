@@ -442,35 +442,15 @@ module tb;
     end
 
     // end of computation
-    //
-    // [R3-2 systemlevel instrumentation] The plain `if (~gpio_out[8])
-    // wait(gpio_out[8]);` idiom is vulnerable to X-propagation: several
-    // ACCL_generate/VCU_inst performance-counter/busy ports have no driver
-    // in the current FHRR (accl_sel=1) elaboration (see the "Uninitialized
-    // out port ... has no driver" vsim-8683 warnings upstream in this run),
-    // and if that X reaches gpio_out[8] transitively, `~gpio_out[8]`
-    // evaluates to X, `if (X)` is treated as false, and the wait is skipped
-    // entirely -- the testbench proceeds straight to spi_check_return_codes
-    // and $stop() while the CPU is still mid-computation, silently
-    // truncating UART/tracer logs. Use explicit case-equality polling
-    // against 1'b1 instead, which cannot be fooled by X, so we genuinely
-    // block until the firmware asserts GPIO8 in eoc(). See
-    // revision_artifacts/R3-2_systemlevel/.
+    // Wait for end-of-computation (GPIO8). Case-equality polling is used
+    // instead of `if (~gpio_out[8]) wait(gpio_out[8]);` so that an X on
+    // gpio_out[8] cannot skip the wait and stop the simulation early.
     while (gpio_out[8] !== 1'b1) begin
       #100ns;
     end
 
-    // Drain delay: even with a correct wait, $stop() below could still race
-    // ahead of in-flight UART bytes / tracer DPI writes issued in the same
-    // delta cycle as the GPIO8 assertion.
-    // [R3-2 BUG2 v3 validation] bumped 5000ns -> 200000ns: with the BUG2 fix
-    // in place, firmware now reaches `illegal_insn_handler_c()` (bench.c)
-    // which prints "Illegal instruction encountered at address 0x%08X: %X\n"
-    // via the (slow, bit-banged) UART/SPI link *right before* calling
-    // exit(1)/eoc(1) (which asserts GPIO8 immediately, not after the print
-    // finishes) -- 5000ns was enough to drain 1-2 short lines but truncated
-    // this longer, later message mid-print ("Il..."). 200000ns comfortably
-    // drains it for diagnosis; harmless for tests that don't hit this path.
+    // Drain delay: let in-flight UART bytes / tracer writes complete
+    // before checking the return code and stopping the simulation.
     #200000ns;
 
     spi_check_return_codes(exit_status);

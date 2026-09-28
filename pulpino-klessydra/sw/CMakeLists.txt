@@ -287,7 +287,10 @@ add_subdirectory(libs/klessydra_lib/general_libs)
 
 if (${USE_KLESSYDRA_M} OR ${USE_KLESSYDRA_T1_3TH} OR ${USE_KLESSYDRA_NETLIST} OR ${USE_KLESSYDRA_OoO} OR ${USE_KLESSYDRA_S1} OR ${USE_KLESSYDRA_FT13} OR ${USE_KLESSYDRA_dFT13})
   add_subdirectory(libs/klessydra_lib/dsp_libs)
-  add_subdirectory(libs/klessydra_lib/vgg16_libs)
+  # vgg16_libs (CNN weights) is not shipped with this repository
+  if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/libs/klessydra_lib/vgg16_libs/CMakeLists.txt)
+    add_subdirectory(libs/klessydra_lib/vgg16_libs)
+  endif()
   add_subdirectory(libs/klessydra_lib/cb_libs)
   add_subdirectory(libs/klessydra_lib/hdc_libs)
 endif()

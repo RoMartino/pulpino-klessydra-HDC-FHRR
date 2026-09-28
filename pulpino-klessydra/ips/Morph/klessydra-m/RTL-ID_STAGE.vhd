@@ -20,6 +20,8 @@ use std.textio.all;
 
 -- local packages ------------
 use work.riscv_klessydra.all;
+--use work.riscv_kless.all;
+--use work.klessydra_parameters.all;
 
 -- pipeline  pinout --------------------
 entity ID_STAGE is
@@ -33,6 +35,7 @@ entity ID_STAGE is
     btb_en                     : natural;
     superscalar_exec_en        : natural;
     accl_en                    : natural;
+    accl_sel                   : natural;
     replicate_accl_en          : natural;
     SPM_NUM                    : natural;  
     Addr_Width                 : natural;
@@ -48,13 +51,11 @@ entity ID_STAGE is
     comparator_en              : out std_logic;
     ls_instr_req               : out std_logic;
     ie_instr_req               : out std_logic;
-    hdc_instr_req              : out std_logic_vector(ACCL_NUM-1 downto 0);
+    dsp_instr_req              : out std_logic_vector(ACCL_NUM-1 downto 0);
     decoded_branching_instr    : in  std_logic_vector(BRANCHING_INSTR_SET_SIZE-1 downto 0);
     decoded_instruction_IE     : out std_logic_vector(EXEC_UNIT_INSTR_SET_SIZE-1 downto 0);
     decoded_instruction_LS     : out std_logic_vector(LS_UNIT_INSTR_SET_SIZE-1 downto 0);
-    decoded_instruction        : out std_logic_vector(HDC_UNIT_INSTR_SET_SIZE-1 downto 0);
-    decoded_instruction_FHRR   : out std_logic_vector(FHRR_UNIT_INSTR_SET_SIZE-1 downto 0);
-    decoded_instruction_MCR    : out std_logic_vector(MCR_UNIT_INSTR_SET_SIZE-1 downto 0);
+    decoded_instruction_DSP    : out std_logic_vector(DSP_UNIT_INSTR_SET_SIZE-1 downto 0);
     data_be_ID                 : out std_logic_vector(3 downto 0);
     data_width_ID              : out std_logic_vector(1 downto 0);
     amo_store                  : in  std_logic;
@@ -84,7 +85,7 @@ entity ID_STAGE is
     core_busy_LS               : in  std_logic;
     busy_LS                    : in  std_logic;
     busy_FPU                   : in  std_logic;
-    busy_hdc                   : in  std_logic_vector(ACCL_NUM-1 downto 0);
+    busy_DSP                   : in  std_logic_vector(ACCL_NUM-1 downto 0);
     busy_ID                    : out std_logic;
     ls_parallel_exec           : out std_logic;
     fpu_parallel_exec          : out std_logic;
@@ -133,8 +134,7 @@ entity ID_STAGE is
     set_branch_condition_ID    : out std_logic;
     zero_rd                    : out std_logic;
     float_instr_req            : out std_logic; 
-    decoded_instruction_FLOAT  : out std_logic_vector(FP_UNIT_INSTR_SET_SIZE-1 downto 0);
-
+    decoded_instruction_FLOAT  : out std_logic_vector(FP_UNIT_INSTR_SET_SIZE-1 downto 0); 
     -- branch predictin
     flush_hart_ID              : in  std_logic_vector(THREAD_POOL_SIZE-1 downto 0);
     branch_predict_taken_ID    : in  std_logic;
@@ -157,7 +157,7 @@ architecture DECODE of ID_STAGE is
   signal branch_predict_taken_IE_int_lat : std_logic;
 
   signal harc_ID_to_DSP            : accl_range;
-  signal hdc_instr_req_wire        : std_logic_vector(accl_range);
+  signal dsp_instr_req_wire        : std_logic_vector(accl_range);
   -- instruction operands
   signal S_Imm_IE                  : std_logic_vector(11 downto 0);  -- debugging signals
   signal I_Imm_IE                  : std_logic_vector(11 downto 0);  -- debugging signals
@@ -271,13 +271,13 @@ begin
       WB_EN_next_ID    <= '0'; 
       instr_rvalid_IE  <= '0';
 
-      if served_irq(harc_ID)   = '1'  or
-         flush_decode(harc_ID) = '1'  or
-         -- harc_sleep(harc_ID)   = '1'  or -- used not to let a to-be-flushed harc to pass to the IE, but currently blocks all sleeping harts which is wrong
+      if served_irq(harc_ID)             = '1'  or
+         flush_decode(harc_ID)           = '1'  or
+         -- harc_sleep(harc_ID)            = '1'  or -- used not to let a to-be-flushed harc to pass to the IE, but currently blocks all sleeping harts which is wrong
          core_busy_IE                    = '1'  or 
          core_busy_LS                    = '1'  or 
-         ls_parallel_exec                = '0'  or
-         fpu_parallel_exec               = '0'  or
+         ls_parallel_exec                = '0'  or 
+         fpu_parallel_exec               = '0'  or 
          dsp_parallel_exec               = '0'  or 
          (data_dependency                = '1'  and flush_hart_ID(harc_ID) = '0') or 
          flush_hart_ID(harc_ID)          = '1'  then -- the instruction pipeline is halted
@@ -696,163 +696,136 @@ begin
               end case;
             end if;
 
-          when HVMEM =>
+          when KMEM =>
             if accl_en = 1 then
               case FUNCT7_wires is
-                when HVMEMLD =>          -- HVMEMLD_INSTRUCTION
+                when KMEMLD =>          -- KMEMLD_INSTRUCTION
                   ls_instr_req <= '1';
-                  decoded_instruction_LS <= HVMEMLD_pattern;
-                when HVMEMSTR =>         -- HVEMSTR_INSTRUCTION
+                  decoded_instruction_LS <= KMEMLD_pattern;
+                when KMEMSTR =>         -- KMEMSTR_INSTRUCTION
                   ls_instr_req <= '1';
-                  decoded_instruction_LS <= HVMEMSTR_pattern;
-                when HVBCASTLD =>         -- HVCASTLD_INSTRUCTION
+                  decoded_instruction_LS <= KMEMSTR_pattern;
+                when KBCASTLD =>         -- KBCASTLD_INSTRUCTION
                   ls_instr_req <= '1';
-                  decoded_instruction_LS <= HVBCASTLD_pattern;
+                  decoded_instruction_LS <= KBCASTLD_pattern;
                 when others =>            -- ILLEGAL_INSTRUCTION
                   ie_instr_req <= '1';
                   decoded_instruction_IE <= ILL_pattern;
               end case;
             end if;
 
-          when HDCU =>
-            if accl_en = 1 then
-              if busy_hdc(harc_ID_to_DSP) = '0' then
+          when KDSP =>
+            if accl_en = 1 and accl_sel = ACCL_SEL_DSP then
+              if busy_DSP(harc_ID_to_DSP) = '0' then
                 case FUNCT7_wires is
-                  when HVBUNDLE =>           -- HVBUNDLE_INSTRUCTION
-                    vec_write_rd_ID <= '1';
-                    vec_read_rs1_ID <= '1';
-                    vec_read_rs2_ID <= '1';
-                    spm_rs1 <= '1';
-                    spm_rs2 <= '1';
-                    decoded_instruction <= HVBUNDLE_pattern;
-                    decoded_instruction_FHRR <= HVBUNDLE_pattern_FHRR;
-                  when HVBIND =>           -- HVBIND_INSTRUCTION
-                    vec_write_rd_ID <= '1';
-                    vec_read_rs1_ID <= '1';
-                    vec_read_rs2_ID <= '1';
-                    spm_rs1 <= '1';
-                    spm_rs2 <= '1';
-                    decoded_instruction <= HVBIND_pattern;
-                    decoded_instruction_FHRR <= HVBIND_pattern_FHRR;
-                  when HVSIM =>           -- HVSIM_INSTRUCTION
-                    vec_write_rd_ID <= '1';
-                    vec_read_rs1_ID <= '1';
-                    vec_read_rs2_ID <= '1';
-                    spm_rs1 <= '1';
-                    spm_rs2 <= '1';
-                    decoded_instruction <= HVSIM_pattern;
-                    decoded_instruction_FHRR <= HVSIM_pattern_FHRR;
-                  when HVCLIP =>           -- HVCLIP_INSTRUCTION
+                  when KADDV =>           -- KADDV_INSTRUCTION
                     vec_read_rs1_ID <= '1';
                     vec_read_rs2_ID <= '1';
                     vec_write_rd_ID <= '1';
                     spm_rs1 <= '1';
                     spm_rs2 <= '1';
-                    decoded_instruction <= HVCLIP_pattern;
-                    decoded_instruction_FHRR <= HVCLIP_pattern_FHRR;
-                  when HVPERM =>           -- HVPERM_INSTRUCTION
+                    decoded_instruction_DSP <= KADDV_pattern;
+                  when KSUBV =>           -- KSUBV_INSTRUCTION
                     vec_read_rs1_ID <= '1';
                     vec_read_rs2_ID <= '1';
                     vec_write_rd_ID <= '1';
                     spm_rs1 <= '1';
-                    decoded_instruction <= HVPERM_pattern;
-                    decoded_instruction_FHRR <= HVPERM_pattern_FHRR;                    
+                    spm_rs2 <= '1';
+                    decoded_instruction_DSP <= KSUBV_pattern;
+                  when KVMUL =>           -- KVMUL_INSTRUCTION
+                    vec_read_rs1_ID <= '1';
+                    vec_read_rs2_ID <= '1';
+                    vec_write_rd_ID <= '1';
+                    spm_rs1 <= '1';
+                    spm_rs2 <= '1';
+                    decoded_instruction_DSP <= KVMUL_pattern;
+                  when KVDIV =>           -- KVDIV_INSTRUCTION
+                    vec_read_rs1_ID <= '1';
+                    vec_read_rs2_ID <= '1';
+                    vec_write_rd_ID <= '1';
+                    spm_rs1 <= '1';
+                    spm_rs2 <= '1';
+                    decoded_instruction_DSP <= KVDIV_pattern;
+                  when KVREM =>           -- KVREM_INSTRUCTION
+                    vec_read_rs1_ID <= '1';
+                    vec_read_rs2_ID <= '1';
+                    vec_write_rd_ID <= '1';
+                    spm_rs1 <= '1';
+                    spm_rs2 <= '1';
+                    decoded_instruction_DSP <= KVREM_pattern;
                   when KVRED =>           -- KVRED_INSTRUCTION
                     vec_read_rs1_ID <= '1';
                     spm_rs1 <= '1';
-                    decoded_instruction <= KVRED_pattern;
-                    decoded_instruction_FHRR <= KVRED_pattern_FHRR;
-                    decoded_instruction_MCR <= KVRED_pattern_MCR;
+                    decoded_instruction_DSP <= KVRED_pattern;
                   when KDOTP =>           -- KDOTP_INSTRUCTION
                     vec_read_rs1_ID <= '1';
                     vec_read_rs2_ID <= '1';
                     spm_rs1 <= '1';
                     spm_rs2 <= '1';
-                    decoded_instruction <= HVSEARCH_pattern;
-                    decoded_instruction_FHRR <= HVSEARCH_pattern_FHRR;
+                    decoded_instruction_DSP <= KDOTP_pattern;
                   when KDOTPPS =>           -- KDOTPPS_INSTRUCTION
                     vec_read_rs1_ID <= '1';
                     vec_read_rs2_ID <= '1';
                     spm_rs1 <= '1';
                     spm_rs2 <= '1';
-                    decoded_instruction <= KDOTPPS_pattern;
-                    decoded_instruction_FHRR <= KDOTPPS_pattern_FHRR;
-                    decoded_instruction_MCR <= KDOTPPS_pattern_MCR;
+                    decoded_instruction_DSP <= KDOTPPS_pattern;
                   when KSVADDSC =>           -- KSVADDSC_INSTRUCTION
                     vec_read_rs1_ID <= '1';
                     vec_write_rd_ID  <= '1';
                     spm_rs1 <= '1';
                     spm_rs2 <= '1';
-                    decoded_instruction <= KSVADDSC_pattern;
-                    decoded_instruction_FHRR <= KSVADDSC_pattern_FHRR;
-                    decoded_instruction_MCR <= KSVADDSC_pattern_MCR;
---                  when KSVADDRF =>           -- KSVADDRF_INSTRUCTION
---                    vec_read_rs1_ID <= '1';
---                    vec_write_rd_ID <= '1';
---                    spm_rs1 <= '1';
---                    decoded_instruction <= KSVADDRF_pattern;
+                    decoded_instruction_DSP <= KSVADDSC_pattern;
+                  when KSVADDRF =>           -- KSVADDRF_INSTRUCTION
+                    vec_read_rs1_ID <= '1';
+                    vec_write_rd_ID <= '1';
+                    spm_rs1 <= '1';
+                    decoded_instruction_DSP <= KSVADDRF_pattern;
                   when KSVMULSC =>           -- KSVMULSC_INSTRUCTION
                     vec_read_rs1_ID <= '1';
                     vec_write_rd_ID  <= '1';
                     spm_rs1 <= '1';
                     spm_rs2 <= '1';
-                    decoded_instruction <= KSVMULSC_pattern;
-                    decoded_instruction_FHRR <= KSVMULSC_pattern_FHRR;
-                    decoded_instruction_MCR <= KSVMULSC_pattern_MCR;
---                  when KSVMULRF =>           -- KSVMULRF_INSTRUCTION
---                    vec_read_rs1_ID <= '1';
---                    vec_write_rd_ID <= '1';
---                    spm_rs1 <= '1';
---                    decoded_instruction <= KSVMULRF_pattern;
+                    decoded_instruction_DSP <= KSVMULSC_pattern;
+                  when KSVMULRF =>           -- KSVMULRF_INSTRUCTION
+                    vec_read_rs1_ID <= '1';
+                    vec_write_rd_ID <= '1';
+                    spm_rs1 <= '1';
+                    decoded_instruction_DSP <= KSVMULRF_pattern;
                   when KSRAV =>           -- KSRAV_INSTRUCTION
                     vec_read_rs1_ID <= '1';
                     vec_write_rd_ID  <= '1';
                     spm_rs1 <= '1';
-                    decoded_instruction <= KSRAV_pattern;
-                    decoded_instruction_FHRR <= KSRAV_pattern_FHRR;
-                    decoded_instruction_MCR <= KSRAV_pattern_MCR;
+                    decoded_instruction_DSP <= KSRAV_pattern;
                   when KSRLV =>           -- KSRLV_INSTRUCTION
                     vec_read_rs1_ID <= '1';
                     vec_write_rd_ID <= '1';
                     spm_rs1 <= '1';
-                    decoded_instruction <= KSRLV_pattern;
-                    decoded_instruction_FHRR <= KSRLV_pattern_FHRR;
-                    decoded_instruction_MCR <= KSRLV_pattern_MCR;
+                    decoded_instruction_DSP <= KSRLV_pattern;
                   when KRELU =>           -- KRELU_INSTRUCTION
                     vec_read_rs1_ID <= '1';
                     vec_write_rd_ID <= '1';
                     spm_rs1 <= '1';
-                    decoded_instruction <= KRELU_pattern;
-                    decoded_instruction_FHRR <= KRELU_pattern_FHRR;
-                    decoded_instruction_MCR <= KRELU_pattern_MCR;
+                    decoded_instruction_DSP <= KRELU_pattern;
                   when KVSLT =>
-                    vec_write_rd_ID <= '1';
                     vec_read_rs1_ID <= '1';
                     vec_read_rs2_ID <= '1';
+                    vec_write_rd_ID <= '1';
                     spm_rs1 <= '1';
                     spm_rs2 <= '1';
-                    decoded_instruction <= KVSLT_pattern;
-                    decoded_instruction_FHRR <= KVSLT_pattern_FHRR;
-                    decoded_instruction_MCR <= KVSLT_pattern_MCR;
+                    decoded_instruction_DSP <= KVSLT_pattern;
                   when KSVSLT =>
-                    vec_write_rd_ID <= '1';
                     vec_read_rs1_ID <= '1';
+                    vec_write_rd_ID <= '1';
                     spm_rs1 <= '1';
-                    decoded_instruction <= KSVSLT_pattern;
-                    decoded_instruction_FHRR <= KSVSLT_pattern_FHRR;
-                    decoded_instruction_MCR <= KSVSLT_pattern_MCR;
+                    decoded_instruction_DSP <= KSVSLT_pattern;
                   when KBCAST =>           -- KBCAST_INSTRUCTION
                     vec_write_rd_ID <= '1';
-                    decoded_instruction <= KBCAST_pattern; 
-                    decoded_instruction_FHRR <= KBCAST_pattern_FHRR;
-                    decoded_instruction_MCR <= KBCAST_pattern_MCR;
+                    decoded_instruction_DSP <= KBCAST_pattern;
                   when KVCP =>           -- KVCP_INSTRUCTION
-                    spm_rs1 <= '1';
                     vec_read_rs1_ID  <= '1';
                     vec_write_rd_ID  <= '1';
-                    decoded_instruction <= KVCP_pattern;
-                    decoded_instruction_FHRR <= KVCP_pattern_FHRR;
-                    decoded_instruction_MCR <= KVCP_pattern_MCR;
+                    spm_rs1 <= '1';
+                    decoded_instruction_DSP <= KVCP_pattern;
                   when others =>            -- ILLEGAL_INSTRUCTION
                     ie_instr_req <= '1';
                     decoded_instruction_IE <= ILL_pattern;
@@ -861,8 +834,75 @@ begin
                 ie_instr_req <= '1';
                 decoded_instruction_IE <= JAL_pattern;
               end if;
+            else
+              ie_instr_req <= '1';
+              decoded_instruction_IE <= ILL_pattern;
             end if;
- 
+
+          when KFHRR =>
+            if accl_en = 1 and accl_sel = ACCL_SEL_FHRR then
+              if busy_DSP(harc_ID_to_DSP) = '0' then
+                if FUNCT3_wires = KARITH32 then
+                  case FUNCT7_wires is
+                    when HVBUNDLE =>
+                      vec_read_rs1_ID <= '1';
+                      vec_read_rs2_ID <= '1';
+                      vec_write_rd_ID <= '1';
+                      spm_rs1 <= '1';
+                      spm_rs2 <= '1';
+                      decoded_instruction_DSP <= HVBUNDLE_pattern;
+                    when HVBIND =>
+                      vec_read_rs1_ID <= '1';
+                      vec_read_rs2_ID <= '1';
+                      vec_write_rd_ID <= '1';
+                      spm_rs1 <= '1';
+                      spm_rs2 <= '1';
+                      decoded_instruction_DSP <= HVBIND_pattern;
+                    when HVSIM =>
+                      vec_read_rs1_ID <= '1';
+                      vec_read_rs2_ID <= '1';
+                      vec_write_rd_ID <= '1';
+                      spm_rs1 <= '1';
+                      spm_rs2 <= '1';
+                      decoded_instruction_DSP <= HVSIM_pattern;
+                    when HVCLIP =>
+                      vec_read_rs1_ID <= '1';
+                      vec_read_rs2_ID <= '1';
+                      vec_write_rd_ID <= '1';
+                      spm_rs1 <= '1';
+                      spm_rs2 <= '1';
+                      decoded_instruction_DSP <= HVCLIP_pattern;
+                    when HVENC =>
+                      vec_read_rs1_ID <= '1';
+                      vec_read_rs2_ID <= '1';
+                      vec_write_rd_ID <= '1';
+                      spm_rs1 <= '1';
+                      spm_rs2 <= '1';
+                      decoded_instruction_DSP <= HVENC_pattern;
+                    when HVPERM =>                              -- [Op-N2] cyclic shift: rs1 = scalar shift amount, rs2 = src HV SPM addr, rd = dst HV SPM addr
+                      vec_read_rs1_ID <= '0';                   -- rs1 is a scalar integer (shift), NOT a vector source
+                      vec_read_rs2_ID <= '1';
+                      vec_write_rd_ID <= '1';
+                      spm_rs1 <= '0';                           -- rs1 does not address SPM
+                      spm_rs2 <= '1';
+                      decoded_instruction_DSP <= HVPERM_pattern;
+                    when others =>
+                      ie_instr_req <= '1';
+                      decoded_instruction_IE <= ILL_pattern;
+                  end case;
+                else
+                  ie_instr_req <= '1';
+                  decoded_instruction_IE <= ILL_pattern;
+                end if;
+              else
+                ie_instr_req <= '1';
+                decoded_instruction_IE <= JAL_pattern;
+              end if;
+            else
+              ie_instr_req <= '1';
+              decoded_instruction_IE <= ILL_pattern;
+            end if;
+
           when others =>                -- ILLEGAL_INSTRUCTION
             ie_instr_req <= '1';
             decoded_instruction_IE <= ILL_pattern;
@@ -991,12 +1031,17 @@ begin
           rs2_valid_int <= '1';
           rd_valid_int  <= '1';
 
-        when HVMEM =>
+        when KMEM =>
           rs1_valid_int <= '1';
           rs2_valid_int <= '1';
           rd_read_valid_int  <= '1';
 
-        when HDCU =>
+        when KDSP =>
+          rs1_valid_int <= '1';
+          rs2_valid_int <= '1';
+          rd_read_valid_int  <= '1';
+
+        when KFHRR =>
           rs1_valid_int <= '1';
           rs2_valid_int <= '1';
           rd_read_valid_int  <= '1';
@@ -1116,6 +1161,7 @@ begin
       bypass_fp_rs2     <= '0';
       bypass_fp_rd_read <= '0';
     end if;
+    -- AAA add the floating point data_dependency register
     if instr_rvalid_ID_int = '1' and flush_decode(harc_ID) = '0' then
       if valid_buf(harc_ID)(rs1(instr_word_ID)) = '0' and rs1_valid = '1' then
         data_dependency <= '1';
@@ -1265,13 +1311,13 @@ begin
   begin
     OPCODE_wires  := OPCODE(instr_word_ID); 
     -- parallelism enablers, halts the pipeline when it is zero. -------------------
-    ls_parallel_exec  <= '0' when (OPCODE_wires = LOAD or OPCODE_wires = STORE or OPCODE_wires = AMO or ((OPCODE_wires = LOAD_F or OPCODE_wires = STORE_F) and RV32F = 1) or OPCODE_wires = HVMEM) and busy_LS = '1' and instr_rvalid_ID_int = '1' else '1';
+    ls_parallel_exec  <= '0' when (OPCODE_wires = LOAD or OPCODE_wires = STORE or OPCODE_wires = AMO or ((OPCODE_wires = LOAD_F or OPCODE_wires = STORE_F) and RV32F = 1) or OPCODE_wires = KMEM) and busy_LS = '1' and instr_rvalid_ID_int = '1' else '1';
     fpu_parallel_exec <= '0' when RV32F = 1 and (OPCODE_wires = FLOAT and busy_FPU = '1') else '1';
-    dsp_parallel_exec <= '0' when (OPCODE_wires = HVMEM or OPCODE_wires = AMO) and busy_hdc(harc_ID_to_DSP) = '1' and instr_rvalid_ID_int = '1' else '1';
-    dsp_to_jump_wire  <= '1' when OPCODE_wires = HDCU and busy_hdc(harc_ID_to_DSP) = '1' else '0';
+    dsp_parallel_exec <= '0' when (OPCODE_wires = KMEM or OPCODE_wires = AMO) and busy_DSP(harc_ID_to_DSP) = '1' and instr_rvalid_ID_int = '1' else '1';
+    dsp_to_jump_wire  <= '1' when (OPCODE_wires = KDSP or OPCODE_wires = KFHRR) and busy_DSP(harc_ID_to_DSP) = '1' else '0';
     busy_ID <= '0';  -- wait for a valid instruction or process the instruction 
     -- A data deoendency is only valid to make a stall when the current dependent instruction is not flushed 
-    if core_busy_IE = '1' or core_busy_LS = '1' or ls_parallel_exec = '0'  or dsp_parallel_exec = '0'  or (data_dependency = '1' and flush_hart_ID(harc_ID) = '0') or branch_stall = '1' or jalr_stall = '1' then
+    if core_busy_IE = '1' or core_busy_LS = '1' or ls_parallel_exec = '0'  or fpu_parallel_exec = '0' or dsp_parallel_exec = '0'  or (data_dependency = '1' and flush_hart_ID(harc_ID) = '0') or branch_stall = '1' or jalr_stall = '1' then
       busy_ID <= '1';  -- wait for the stall to finish, block new instructions
     end if; 
   end process;
@@ -1285,35 +1331,30 @@ begin
     busy_ID           <= '0';
     ls_parallel_exec  <= '0' when busy_LS = '1' and instr_rvalid_ID_int = '1' else '1';
     fpu_parallel_exec <= '0' when RV32F = 1 and busy_FPU = '1' else '1';
-    dsp_parallel_exec <= '0' when or_vect_bits(busy_hdc) = '1' and instr_rvalid_ID_int = '1' else '1';
-    dsp_to_jump_wire  <= '1' when OPCODE_wires = HDCU and busy_hdc(harc_ID_to_DSP) = '1' else '0';
+    dsp_parallel_exec <= '0' when or_vect_bits(busy_DSP) = '1' and instr_rvalid_ID_int = '1' else '1';
+    dsp_to_jump_wire  <= '1' when (OPCODE_wires = KDSP or OPCODE_wires = KFHRR) and busy_DSP(harc_ID_to_DSP) = '1' else '0';
     -- A data deoendency is only valid to make a stall when the current dependent instruction is not flushed
-    if core_busy_IE = '1' or core_busy_LS = '1' or ls_parallel_exec = '0'  or dsp_parallel_exec = '0' or (data_dependency = '1' and flush_hart_ID(harc_ID) = '0') or branch_stall = '1' or jalr_stall = '1' then
+    if core_busy_IE = '1' or core_busy_LS = '1' or ls_parallel_exec = '0'  or fpu_parallel_exec = '0' or dsp_parallel_exec = '0' or (data_dependency = '1' and flush_hart_ID(harc_ID) = '0') or branch_stall = '1' or jalr_stall = '1' then
       busy_ID <= '1';  -- wait for the stall to finish, block new instructions 
     end if; 
   end process;
   end generate;
 
 
-  hdc_instr_req_wire <= (others => '0') when not (instr_rvalid_ID_int = '1'     and 
-                                                  busy_ID = '0'                 and 
-                                                  OPCODE(instr_word_ID) = HDCU  and 
-                                                  dsp_to_jump_wire = '0'        and 
-                                                  flush_hart_ID(harc_ID) = '0') else (harc_ID_to_DSP => '1', others => '0');
-
-  --process(all)
-  --begin
-  --  hdc_instr_req_wire <= (others => '0');
-  --  if instr_rvalid_ID_int = '1' and busy_ID = '0' then
-  --    if OPCODE(instr_word_ID) = KDSP then
-  --      if dsp_to_jump_wire = '0' then
-  --        if flush_hart_ID(harc_ID) = '0' then
-  --          hdc_instr_req_wire(harc_ID_to_DSP) <=  '1';
-  --        end if;
-  --      end if;
-  --    end if;
-  --  end if;
-  --end process; --------------------------------------------------------------------------------
+  process(all)
+  begin
+    dsp_instr_req_wire <= (others => '0');
+    if instr_rvalid_ID_int = '1' and busy_ID = '0' then
+      -- FHRR shares the same VCU request path as the original DSP custom ops.
+      if OPCODE(instr_word_ID) = KDSP or OPCODE(instr_word_ID) = KFHRR then
+        if dsp_to_jump_wire = '0' then
+          if flush_hart_ID(harc_ID) = '0' then
+            dsp_instr_req_wire(harc_ID_to_DSP) <= '1';
+          end if;
+        end if;
+      end if;
+    end if;
+  end process; --------------------------------------------------------------------------------
 
   process(clk_i, rst_ni)
   begin
@@ -1321,7 +1362,7 @@ begin
       dsp_to_jump  <= (others => '0');
     elsif rising_edge(clk_i) then
       dsp_to_jump(harc_ID)   <= dsp_to_jump_wire;
-      hdc_instr_req <= hdc_instr_req_wire;
+      dsp_instr_req <= dsp_instr_req_wire;
     end if;
   end process;
 
